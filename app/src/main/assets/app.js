@@ -383,8 +383,20 @@ async function send(){
       const data=JSON.parse(txt);
       const content=data.content||[];
       const toolUses=proj?content.filter(x=>x.type==="tool_use"):[];
+      // Hidden reasoning arrives in different shapes depending on the backend:
+      // Anthropic-style content blocks of type "thinking", or OpenAI-style
+      // choices[0].message.reasoning_content. Collect it and wrap in <think> so
+      // md() renders the collapsible reasoning block.
+      let reasoning="";
+      for(const item of content){
+        if(item.type==="thinking")reasoning+=(item.thinking||item.text||"")+"\n";
+        if(item.reasoning_content)reasoning+=item.reasoning_content+"\n";
+      }
+      const altMsg=data.choices&&data.choices[0]&&data.choices[0].message;
+      if(!reasoning&&altMsg&&altMsg.reasoning_content)reasoning=altMsg.reasoning_content;
       const text=content.filter(x=>x.type==="text").map(x=>x.text).join("\n");
-      if(text)final+=(final?"\n\n":"")+text;
+      const withThink=reasoning&&text?`<think>${reasoning.trim()}</think>\n\n${text}`:text;
+      if(withThink)final+=(final?"\n\n":"")+withThink;
       if(!toolUses.length)break;
       messages.push({role:"assistant",content});
       const results=[];
