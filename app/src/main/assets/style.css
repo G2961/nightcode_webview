@@ -27,11 +27,9 @@ button,input,textarea{font:inherit;color:inherit}
 button{border:0;cursor:pointer;background:none;padding:0}
 svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
-#app{
-  #app{height:100%;display:flex;flex-direction:column;position:relative;
+#app{height:100%;display:flex;flex-direction:column;position:relative;
   background:radial-gradient(52% 30% at 50% -6%,rgba(124,140,255,.09),transparent 70%),var(--bg);
   touch-action:pan-y}
-}
 
 /* ── Top bar ─────────────────────────── */
 .topbar{height:60px;min-height:60px;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;position:relative;z-index:5;touch-action:none}
