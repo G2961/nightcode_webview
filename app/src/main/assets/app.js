@@ -198,7 +198,7 @@ function renderModels(){
 }
 function updateModelBtn(){$("modelBtn").textContent=state.selected||"Model"}
 function selectModel(id){state.selected=decodeURIComponent(id);save();updateModelBtn();closeSheets()}
-async function fetchModels(){
+async function fetchModels(closeOnSuccess=false){
   $("settingsError").textContent="";
   if(!state.base){$("settingsError").textContent="Base URL is empty.";return}
   try{
@@ -208,6 +208,7 @@ async function fetchModels(){
     state.models=data.map(x=>({id:x.id,name:x.display_name||x.id,provider:provider(x.id)}));
     if(!state.selected&&state.models[0])state.selected=state.models[0].id;
     save();renderModels();updateModelBtn();
+    if(closeOnSuccess)closeSheets();
   }catch(e){$("settingsError").textContent=e.message||"Refresh failed"}
 }
 async function send(){
@@ -359,8 +360,12 @@ $("rowToolAccess").onclick=()=>{closeSheets();openSheet("contextSheet")}
 document.addEventListener("click",e=>{const card=e.target.closest("#openProjectCard");if(card)openProject()});
 $("modelBtn").onclick=()=>{openSheet("modelSheet");renderModels()}
 $("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key}
-$("saveSettings").onclick=()=>{state.base=$("baseUrl").value.trim();state.key=$("apiKey").value.trim();save();fetchModels()}
-$("refreshModels").onclick=fetchModels
+$("saveSettings").onclick=async()=>{
+  state.base=$("baseUrl").value.trim();state.key=$("apiKey").value.trim();save();
+  const btn=$("saveSettings");btn.disabled=true;const label=btn.textContent;btn.textContent="Saving…";
+  try{await fetchModels(true)}finally{btn.disabled=false;btn.textContent=label}
+}
+$("refreshModels").onclick=()=>fetchModels()
 $("sheetScrim").onclick=closeSheets
 $("contextBtn").onclick=()=>{openSheet("contextSheet");$("inputTokens").value=state.settings.input;$("outputTokens").value=state.settings.output;$("autoCompact").checked=state.settings.auto;$("threshold").value=state.settings.threshold}
 $("saveContext").onclick=()=>{state.settings={input:Number($("inputTokens").value)||128000,output:Number($("outputTokens").value)||6000,auto:$("autoCompact").checked,threshold:Number($("threshold").value)||80};save();closeSheets()}
