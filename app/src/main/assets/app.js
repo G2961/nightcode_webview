@@ -20,11 +20,42 @@ function save(){
   localStorage.setItem("settings",JSON.stringify(state.settings));
 }
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-function md(s){
-  const t=esc(s||"");
-  return t
-    .replace(/```(\w*)\n?([\s\S]*?)```/g,(_,lang,code)=>`<pre class="code-block">${lang?`<div class="code-lang">${lang}</div>`:""}<code>${code.replace(/\n$/,"")}</code></pre>`)
-    .replace(/`([^`\n]+)`/g,'<code class="inline-code">$1</code>');
+function md(s,opts={}){
+  const blocks=[];
+  const placeholder=html=>{const i=blocks.length;blocks.push(html);return `\u0000${i}\u0000`};
+  let t=String(s||"");
+  // Models sometimes return reasoning as literal <think>…</think> text —
+  // extract before escaping so raw tags never leak into the bubble.
+  t=t.replace(/<think\s*>\s*([\s\S]*?)\s*<\/think\s*>/gi,(_,thought)=>
+    placeholder(`<details class="reasoning-block"><summary><span class="reasoning-label">Reasoning</span><span class="reasoning-time">Thought for ${formatReasoningTime(opts.reasoningDurationMs)}</span></summary><pre>${esc(thought.trim())}</pre></details>`));
+  t=t.replace(/<think\s*>/gi,"").replace(/<\/think\s*>/gi,"");
+  let x=esc(t);
+  x=x.replace(/```([\w+-]*)\n?([\s\S]*?)```/g,(_,lang,code)=>placeholder(`<pre class="code-block">${lang?`<div class="code-lang">${esc(lang)}</div>`:""}<code>${code.replace(/\n$/,"")}</code></pre>`));
+  x=x.replace(/`([^`\n]+)`/g,(_,code)=>placeholder(`<code class="inline-code">${code}</code>`));
+  const lines=x.split("\n");let out=[],inUl=false,inOl=false;
+  const closeLists=()=>{if(inUl){out.push("</ul>");inUl=false}if(inOl){out.push("</ol>");inOl=false}};
+  for(const line of lines){
+    if(!line.trim()){closeLists();continue}
+    let m=line.match(/^\s*[-*+]\s+(.+)$/);if(m){if(!inUl){closeLists();out.push("<ul>");inUl=true}out.push("<li>"+m[1]+"</li>");continue}
+    m=line.match(/^\s*\d+[.)]\s+(.+)$/);if(m){if(!inOl){closeLists();out.push("<ol>");inOl=true}out.push("<li>"+m[1]+"</li>");continue}
+    closeLists();
+    if(/^###\s+/.test(line)){out.push("<h3>"+line.replace(/^###\s+/,"")+"</h3>");continue}
+    if(/^##\s+/.test(line)){out.push("<h2>"+line.replace(/^##\s+/,"")+"</h2>");continue}
+    if(/^#\s+/.test(line)){out.push("<h1>"+line.replace(/^#\s+/,"")+"</h1>");continue}
+    if(/^>\s?/.test(line)){out.push("<blockquote>"+line.replace(/^>\s?/,"")+"</blockquote>");continue}
+    out.push("<p>"+line+"</p>");
+  }
+  closeLists();
+  let html=out.join("");
+  html=html.replace(/\*\*([^*\n]+)\*\*/g,"<strong>$1</strong>").replace(/__([^_\n]+)__/g,"<strong>$1</strong>");
+  html=html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g,"<em>$1</em>").replace(/(?<!_)_([^_\n]+)_(?!_)/g,"<em>$1</em>");
+  html=html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  html=html.replace(/\u0000(\d+)\u0000/g,(_,i)=>blocks[Number(i)]);
+  return '<div class="markdown">'+html+"</div>";
+}
+function formatReasoningTime(ms){
+  const sec=Math.max(1,Math.round((Number(ms)||0)/1000));
+  return sec+"s";
 }
 function welcomeHtml(){
   return `<section id="welcome" class="welcome">
@@ -45,9 +76,11 @@ function welcomeHtml(){
 }
 function messageHtml(m){
   const files=(m.attachments||[]).map(a=>`<div class="file-card"><svg><use href="#i-file"/></svg><span class="file-name">${esc(a.name)}</span><small>${esc(a.mime||"file")}</small></div>`).join("");
+  const tools=(m.tools||[]).map(t=>`<div class="tool-activity"><div class="tool-activity-head"><div class="tool-activity-icon"${t.error?' style="color:#ff7279"':""}>${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolLabel(t.name))}</div><div class="tool-activity-sub">${esc(toolTarget(t.input)||"")}</div></div><div class="tool-activity-status ${t.error?"error":"done"}"><span>${t.error?"Failed":"Done"}</span></div></div><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></div>`).join("");
   const time=m.ts?`<div class="msg-time">${new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div>`:"";
-  const reasoning=m.reasoning?`<div class="reasoning">Reasoning · ${Math.max(1,Math.round(m.reasoning/1000))}s</div>`:"";
-  return `<div class="message ${m.role}">${files}<div class="bubble">${reasoning}${m.role==="assistant"?md(m.text):esc(m.text||"")}</div>${time}</div>`;
+  const hadThink=/<think[\s>]/i.test(String(m.text||""));
+  const reasoning=m.reasoning&&!hadThink?`<div class="reasoning">Reasoning · ${formatReasoningTime(m.reasoning)}</div>`:"";
+  return `<div class="message ${m.role}">${files}${tools}<div class="bubble">${reasoning}${m.role==="assistant"?md(m.text,{reasoningDurationMs:m.reasoning}):esc(m.text||"")}</div>${time}</div>`;
 }
 function render(){
   const chat=$("chat");
@@ -62,7 +95,7 @@ function render(){
 function showTyping(){
   removeTyping();
   const chat=$("chat");
-  chat.insertAdjacentHTML("beforeend",'<div class="message assistant" id="typing"><div class="bubble thinking"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div></div>');
+  chat.insertAdjacentHTML("beforeend",'<div class="message assistant" id="typing"><div class="assistant-activity"><span class="activity-dots"><i></i><i></i><i></i></span><span>Reasoning…</span></div></div>');
   chat.scrollTop=chat.scrollHeight;
 }
 function removeTyping(){const t=$("typing");if(t)t.remove()}
@@ -146,16 +179,37 @@ async function send(){
   const started=Date.now();
   try{
     compactIfNeeded();
-    const messages=state.messages.map(m=>({role:m.role,content:m.text})).filter(m=>m.content!==undefined);
+    // History must never contain <think> blocks — models reject foreign tags on the way back.
+    const messages=state.messages.map(m=>({role:m.role,content:String(m.text||"").replace(/<think\s*>[\s\S]*?<\/think\s*>/gi,"").replace(/<\/?think\s*>/gi,"").trim()})).filter(m=>m.content);
     const system=state.summary?`You are NightCode, a helpful AI coding assistant.\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"You are NightCode, a helpful AI coding assistant. Maintain continuity with the supplied conversation.";
-    const body={model:state.selected,max_tokens:Number(state.settings.output)||6000,system,messages};
-    const r=await fetch(state.base.replace(/\/$/,"")+"/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},body:JSON.stringify(body)});
-    const txt=await r.text();if(!r.ok)throw Error(txt.slice(0,1000));
-    const data=JSON.parse(txt);
-    const text=(data.content||[]).filter(x=>x.type==="text").map(x=>x.text).join("\n").replace(/<think>[\s\S]*?<\/think>/gi,"").trim();
+    let final="";const toolCalls=[];
+    for(let turn=0;turn<6;turn++){
+      const body={model:state.selected,max_tokens:Number(state.settings.output)||6000,system,messages};
+      const r=await fetch(state.base.replace(/\/$/,"")+"/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},body:JSON.stringify(body)});
+      const txt=await r.text();if(!r.ok)throw Error(txt.slice(0,1000));
+      const data=JSON.parse(txt);
+      const content=data.content||[];
+      const toolUses=content.filter(x=>x.type==="tool_use");
+      const text=content.filter(x=>x.type==="text").map(x=>x.text).join("\n");
+      if(text)final+=(final?"\n\n":"")+text;
+      if(!toolUses.length)break;
+      messages.push({role:"assistant",content});
+      const results=[];
+      for(const u of toolUses){
+        const activity=showToolActivity(u.name,u.input||{});
+        const msg="Tool '"+u.name+"' is not available in NightCode WebView. Respond using the conversation instead.";
+        activity.update(msg,true);
+        toolCalls.push({name:u.name,input:u.input||{},result:msg,error:true});
+        results.push({type:"tool_result",tool_use_id:u.id,is_error:true,content:msg});
+      }
+      messages.push({role:"user",content:results});
+      showTyping();
+    }
     removeTyping();
-    addMessage("assistant",text||"(empty response)",[]);
-    state.messages[state.messages.length-1].reasoning=Date.now()-started;save();render();
+    addMessage("assistant",final.trim()||"(empty response)",[]);
+    const last=state.messages[state.messages.length-1];
+    last.reasoning=Date.now()-started;if(toolCalls.length)last.tools=toolCalls;
+    save();render();
   }catch(e){removeTyping();addMessage("assistant","Error: "+(e.message||e))}
   finally{$("sendBtn").disabled=false}
 }
@@ -171,6 +225,50 @@ function compactNow(show=true){
   state.messages=state.messages.slice(-4);save();render();if(show)closeSheets();
 }
 function resizeInput(){$("input").style.height="auto";$("input").style.height=Math.min($("input").scrollHeight,150)+"px"}
+
+/* ── Tool activity cards ────────────── */
+function toolIcon(name){
+  const paths={
+    list_files:'<path d="M4 6h16v13H4z"/><path d="M7 10h10M7 14h7"/>',
+    read_file:'<path d="M6 3h9l3 3v15H6z"/><path d="M9 12h6M9 16h5"/>',
+    search_files:'<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 5 5"/>',
+    get_file_info:'<path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h4"/>',
+    write_file:'<path d="M5 4h14v16H5z"/><path d="m8 16 8-8M13 7l4 4"/>',
+    create_directory:'<path d="M3 6h7l2 2h9v11H3z"/><path d="M12 11v5M9.5 13.5h5"/>',
+    rename_file:'<path d="M5 5h14v14H5z"/><path d="m8 15 7-7M13 8h2v2"/>',
+    delete_file:'<path d="M5 7h14M9 7V4h6v3M8 10v7M12 10v7M16 10v7M6 7l1 13h10l1-13"/>',
+    web_search:'<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5S14.6 18.2 12 20.5c-2.6-2.3-3.9-5.2-3.9-8.5S9.4 5.8 12 3.5z"/>'
+  };
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.get_file_info)+'</svg>';
+}
+function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web'}[name]||String(name||'').replace(/_/g,' '))}
+function toolTarget(input){return input?.path||input?.to||input?.query||input?.url||''}
+function makeTree(text){
+  const lines=String(text||"").split("\n").filter(Boolean).slice(0,80);
+  return lines.map((x,i)=>((i===lines.length-1?"└── ":"├── ")+x)).join("\n")||"No results.";
+}
+function toolPreview(name,input,result){
+  const out=String(result||"");
+  if(name==="list_files"||name==="search_files")return '<div class="tree-title">'+(name==="list_files"?"PROJECT":"MATCHES")+'</div><div class="tree">'+esc(makeTree(out))+'</div>';
+  if(input?.path||input?.url)return '<div class="tool-file-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#i-file"/></svg><span>'+esc(input.path||input.url)+"</span></div><pre>"+esc(out.slice(0,5000))+"</pre>";
+  return '<pre>'+esc(out.slice(0,5000))+"</pre>";
+}
+function showToolActivity(name,input){
+  const chat=$("chat");
+  removeTyping();
+  const wrap=document.createElement("div");wrap.className="message assistant";
+  const card=document.createElement("div");card.className="tool-activity";
+  card.innerHTML='<div class="tool-activity-head"><div class="tool-activity-icon">'+toolIcon(name)+'</div><div class="tool-activity-text"><div class="tool-activity-title">'+esc(toolLabel(name))+'</div><div class="tool-activity-sub">'+esc(toolTarget(input)||"Working")+'</div></div><div class="tool-activity-status"><span class="tool-spinner"></span><span>Working</span></div></div><div class="tool-preview"></div>';
+  wrap.appendChild(card);chat.appendChild(wrap);chat.scrollTop=chat.scrollHeight;
+  return {update(result,error=false){
+    card.querySelector(".tool-preview").innerHTML=toolPreview(name,input,result);
+    const st=card.querySelector(".tool-activity-status");
+    st.className="tool-activity-status "+(error?"error":"done");
+    st.innerHTML="<span>"+(error?"Failed":"Done")+"</span>";
+    if(error)card.querySelector(".tool-activity-icon").style.color="#ff7279";
+    chat.scrollTop=chat.scrollHeight;
+  }};
+}
 
 $("menuBtn").onclick=()=>{$("drawer").classList.add("open");$("scrim").classList.add("open")}
 $("closeDrawer").onclick=()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")}
