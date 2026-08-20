@@ -92,6 +92,18 @@ function formatReasoningTime(ms){
   const sec=Math.max(1,Math.round((Number(ms)||0)/1000));
   return sec+"s";
 }
+/* Splits hidden reasoning out of a raw model response. Same tag list as md()/strip(). */
+function extractReasoning(text){
+  const TAGS=[["think","think"],["thinking","thinking"],["reasoning","reasoning"],["thought","thought"]];
+  let thinking="";
+  let rest=String(text||"");
+  for(const [open,close] of TAGS){
+    const re=new RegExp(`<${open}(\\s[^>]*)?>\s*([\s\S]*?)\s*</${close}(\s[^>]*)?>`,"gi");
+    rest=rest.replace(re,(_,__,thought)=>{thinking+=thought.trim()+"\n";return ""});
+    rest=rest.replace(new RegExp(`</?${open}(\\s[^>]*)?>`,"gi"),"");
+  }
+  return {thinking:thinking.trim(),rest:rest.trim()};
+}
 function welcomeHtml(){
   const projectSub=state.projectName?"Connected: "+esc(state.projectName):"Continue coding";
   return `<section id="welcome" class="welcome">
@@ -120,9 +132,21 @@ function messageHtml(m){
   if(!showBubble)return `<div class="message ${m.role}">${files}</div>`;
   const tools=(m.tools||[]).map(t=>`<div class="tool-activity"><div class="tool-activity-head"><div class="tool-activity-icon"${t.error?' style="color:#ff7279"':""}>${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolLabel(t.name))}</div><div class="tool-activity-sub">${esc(toolTarget(t.input)||"")}</div></div><div class="tool-activity-status ${t.error?"error":"done"}">${t.error?"<span>Failed</span>":"<svg><use href=\"#i-check\"/></svg>"}</div></div><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></div>`).join("");
   const time=m.ts?`<div class="msg-time">${new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div>`:"";
-  const hadThink=/<(think|thinking|reasoning|thought)[\s>]/i.test(String(m.text||""));
-  const reasoning=m.reasoning&&!hadThink?`<div class="reasoning">Reasoning · ${formatReasoningTime(m.reasoning)}</div>`:"";
-  return `<div class="message ${m.role}">${files}${tools}<div class="bubble">${reasoning}${m.role==="assistant"?md(m.text,{reasoningDurationMs:m.reasoning}):esc(m.text||"")}</div>${time}</div>`;
+  // Reasoning renders as its own collapsible card ABOVE the bubble (agent-style),
+  // never mixed into the answer text.
+  let reasoningHtml="";
+  if(m.role==="assistant"){
+    const {thinking,rest}=extractReasoning(m.text);
+    const dur=m.reasoning?formatReasoningTime(m.reasoning):null;
+    if(thinking){
+      reasoningHtml=`<details class="reasoning-block"><summary><span class="reasoning-label">Reasoning</span><span class="reasoning-time">Thought for ${dur||"a moment"}</span></summary><pre>${esc(thinking)}</pre></details>`;
+      m._cleanText=rest;
+    }else if(m.reasoning){
+      reasoningHtml=`<div class="reasoning">Reasoning · ${dur}</div>`;
+    }
+  }
+  const bodyText=m.role==="assistant"?(m._cleanText!==undefined?m._cleanText:m.text):m.text;
+  return `<div class="message ${m.role}">${files}${tools}${reasoningHtml}<div class="bubble">${m.role==="assistant"?md(bodyText,{reasoningDurationMs:m.reasoning}):esc(m.text||"")}</div>${time}</div>`;
 }
 function render(){
   const chat=$("chat");
