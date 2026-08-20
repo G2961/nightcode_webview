@@ -96,7 +96,6 @@ function messageHtml(m){
     const meta=a.kind==="image"?"image":(a.mime||"file");
     return `<div class="file-card"><svg><use href="#i-file"/></svg><span class="file-name">${esc(a.name)}</span><small>${esc(meta)}</small></div>`;
   }).join("");
-  const body=m.text||m.attachments&&m.attachments.length?"":"";
   const showBubble=m.text||m.role!=="user";
   if(!showBubble)return `<div class="message ${m.role}">${files}</div>`;
   const tools=(m.tools||[]).map(t=>`<div class="tool-activity"><div class="tool-activity-head"><div class="tool-activity-icon"${t.error?' style="color:#ff7279"':""}>${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolLabel(t.name))}</div><div class="tool-activity-sub">${esc(toolTarget(t.input)||"")}</div></div><div class="tool-activity-status ${t.error?"error":"done"}"><span>${t.error?"Failed":"Done"}</span></div></div><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></div>`).join("");
@@ -154,7 +153,8 @@ window.__onFilesPicked=function(files){
   for(const f of files){
     const isImage=/\.(png|jpe?g|webp|gif)$/i.test(f.name);
     if(isImage){
-      state.attachments.push({name:f.name,kind:"image",data:f.b64,dataUrl:"data:image/jpeg;base64,"+f.b64});
+      const mime=guessMime(f.name);
+      state.attachments.push({name:f.name,kind:"image",data:f.b64,dataUrl:`data:${mime};base64,${f.b64}`});
     }else{
       state.attachments.push({name:f.name,kind:"text",data:f.b64});
     }
