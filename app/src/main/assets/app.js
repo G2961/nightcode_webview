@@ -405,6 +405,7 @@ async function send(){
       }));
       if(!r.ok)throw Error(txt.slice(0,1000));
       const data=JSON.parse(txt);
+      console.log("[NightCode] response content blocks "+JSON.stringify((data.content||[]).map(x=>({type:x.type,hasText:!!x.text,hasThinking:!!(x.thinking||x.reasoning_content)}))));
       const content=data.content||[];
       const toolUses=proj?content.filter(x=>x.type==="tool_use"):[];
       // Hidden reasoning arrives in different shapes depending on the backend:
