@@ -139,11 +139,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun pushSysInsets() {
-        Log.d("NightCodeInsets", "status=$sysStatus nav=$sysNav ime=$sysIme")
+        // WindowInsets arrive in physical pixels, but CSS pixels in the WebView are
+        // density-independent. Without this conversion every offset renders ~2.6x
+        // too large on a Pixel 6 (density 2.625).
+        val density = resources.displayMetrics.density
+        val cssStatus = (sysStatus / density).toInt()
+        val cssNav = (sysNav / density).toInt()
+        val cssIme = (sysIme / density).toInt()
         webView.evaluateJavascript(
-            "document.documentElement.style.setProperty('--sys-status','${sysStatus}px');" +
-                "document.documentElement.style.setProperty('--sys-nav','${sysNav}px');" +
-                "document.documentElement.style.setProperty('--sys-ime','${sysIme}px');",
+            "document.documentElement.style.setProperty('--sys-status','${cssStatus}px');" +
+                "document.documentElement.style.setProperty('--sys-nav','${cssNav}px');" +
+                "document.documentElement.style.setProperty('--sys-ime','${cssIme}px');",
             null
         )
     }
