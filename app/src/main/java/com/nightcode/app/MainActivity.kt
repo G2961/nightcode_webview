@@ -13,6 +13,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.documentfile.provider.DocumentFile
@@ -90,6 +91,16 @@ class MainActivity : ComponentActivity() {
         }
 
         setContentView(webView)
+
+        // env(safe-area-inset-*) is always 0 inside an Android WebView, so the system
+        // bar insets must be applied natively. Padding the WebView itself shifts the
+        // whole page (fixed composer included) below the status bar and above the
+        // navigation bar; the WebView background fills the bars seamlessly.
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(0, bars.top, 0, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
         webView.loadUrl("file:///android_asset/index.html")
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
