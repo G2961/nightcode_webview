@@ -32,7 +32,10 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
   touch-action:pan-y}
 
 /* ── Top bar ─────────────────────────── */
-.topbar{height:60px;min-height:60px;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;padding-top:calc(15px + var(--sys-status,0px));position:relative;z-index:5;touch-action:none}
+/* height:60px with a 64px padding-top made the content box negative, so flex
+   children (logo, icons) overflowed downward. The status inset now sits in
+   margin-top, keeping the bar itself a clean 60px with centered content. */
+.topbar{height:60px;min-height:60px;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;margin-top:calc(15px + var(--sys-status,0px));position:relative;z-index:5;touch-action:none}
 .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;letter-spacing:.2px}
 .brand-logo{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;color:#dfe3ff;
   background:linear-gradient(135deg,rgba(124,140,255,.28),rgba(163,124,255,.16));
