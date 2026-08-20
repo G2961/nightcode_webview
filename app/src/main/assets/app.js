@@ -144,7 +144,11 @@ function messageHtml(m){
     }
   }
   const bodyText=m.role==="assistant"?(m._cleanText!==undefined?m._cleanText:m.text):m.text;
-  return `<div class="message ${m.role}">${files}${tools}${reasoningHtml}<div class="bubble">${m.role==="assistant"?md(bodyText,{reasoningDurationMs:m.reasoning}):esc(m.text||"")}</div>${time}</div>`;
+  const bubbleHtml=m.role==="assistant"?md(bodyText,{reasoningDurationMs:m.reasoning}):esc(m.text||"");
+  if(m.role==="assistant"){
+    console.log("[NightCode] rendered assistant msg html "+JSON.stringify({hasReasoningCard:reasoningHtml.length>0,reasoningHtmlPrefix:reasoningHtml.slice(0,120),bubbleHtml:bubbleHtml.slice(0,120),mText:m.text.slice(0,200)}));
+  }
+  return `<div class="message ${m.role}">${files}${tools}${reasoningHtml}<div class="bubble">${bubbleHtml}</div>${time}</div>`;
 }
 function render(){
   const chat=$("chat");
