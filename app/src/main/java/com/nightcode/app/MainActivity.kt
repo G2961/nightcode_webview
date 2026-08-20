@@ -94,17 +94,16 @@ class MainActivity : ComponentActivity() {
         setContentView(webView)
 
         // env(safe-area-inset-*) is always 0 inside an Android WebView, so the system
-        // bar insets must be applied natively. We inject them as CSS variables that
-        // the page can read, instead of padding the WebView (which would push the
-        // status bar text into a clipped area).
-        ViewCompat.setOnApplyWindowInsetsListener(webView) { _, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
-            val top = bars.top
-            val bottom = bars.bottom
-            webView.evaluateJavascript(
-                "document.documentElement.style.setProperty('--sys-top','${top}px');" +
-                    "document.documentElement.style.setProperty('--sys-bottom','${bottom}px');"
-            ) {}
+        // bar insets must be applied natively. Padding the WebView itself shrinks the
+        // content area, which pushes the topbar below the status bar and pins the
+        // composer above both the navigation bar and the keyboard (adjustResize +
+        // ime() inset include the keyboard height). The WebView background fills
+        // the padded areas so the look stays seamless.
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime()
+            )
+            v.setPadding(0, bars.top, 0, bars.bottom)
             insets
         }
         webView.loadUrl("file:///android_asset/index.html")
