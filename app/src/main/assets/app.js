@@ -54,11 +54,16 @@ function md(s,opts={}){
   const blocks=[];
   const placeholder=html=>{const i=blocks.length;blocks.push(html);return `\u0000${i}\u0000`};
   let t=String(s||"");
-  // Models sometimes return reasoning as literal <think>…</think> text —
-  // extract before escaping so raw tags never leak into the bubble.
-  t=t.replace(/<think\s*>\s*([\s\S]*?)\s*<\/think\s*>/gi,(_,thought)=>
-    placeholder(`<details class="reasoning-block"><summary><span class="reasoning-label">Reasoning</span><span class="reasoning-time">Thought for ${formatReasoningTime(opts.reasoningDurationMs)}</span></summary><pre>${esc(thought.trim())}</pre></details>`));
-  t=t.replace(/<think\s*>/gi,"").replace(/<\/think\s*>/gi,"");
+  // Extract reasoning BEFORE escaping so raw tags never leak into the bubble.
+  // Known thinking-tag pairs: extend this list as new models appear.
+  const THINK_TAGS=[["think","think"],["thinking","thinking"],["reasoning","reasoning"],["thought","thought"]];
+  for(const [open,close] of THINK_TAGS){
+    const re=new RegExp(`<${open}(\\s[^>]*)?>\s*([\s\S]*?)\s*</${close}(\s[^>]*)?>`,"gi");
+    t=t.replace(re,(_,__,thought)=>
+      placeholder(`<details class="reasoning-block"><summary><span class="reasoning-label">Reasoning</span><span class="reasoning-time">Thought for ${formatReasoningTime(opts.reasoningDurationMs)}</span></summary><pre>${esc(thought.trim())}</pre></details>`));
+    // Truncated/dangling tag: strip the tag itself, keep the text out of the UI.
+    t=t.replace(new RegExp(`</?${open}(\\s[^>]*)?>`,"gi"),"");
+  }
   let x=esc(t);
   x=x.replace(/```([\w+-]*)\n?([\s\S]*?)```/g,(_,lang,code)=>placeholder(`<pre class="code-block">${lang?`<div class="code-lang">${esc(lang)}</div>`:""}<code>${code.replace(/\n$/,"")}</code></pre>`));
   x=x.replace(/`([^`\n]+)`/g,(_,code)=>placeholder(`<code class="inline-code">${code}</code>`));
@@ -113,9 +118,9 @@ function messageHtml(m){
   }).join("");
   const showBubble=m.text||m.role!=="user";
   if(!showBubble)return `<div class="message ${m.role}">${files}</div>`;
-  const tools=(m.tools||[]).map(t=>`<div class="tool-activity"><div class="tool-activity-head"><div class="tool-activity-icon"${t.error?' style="color:#ff7279"':""}>${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolLabel(t.name))}</div><div class="tool-activity-sub">${esc(toolTarget(t.input)||"")}</div></div><div class="tool-activity-status ${t.error?"error":"done"}"><span>${t.error?"Failed":"Done"}</span></div></div><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></div>`).join("");
+  const tools=(m.tools||[]).map(t=>`<div class="tool-activity"><div class="tool-activity-head"><div class="tool-activity-icon"${t.error?' style="color:#ff7279"':""}>${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolLabel(t.name))}</div><div class="tool-activity-sub">${esc(toolTarget(t.input)||"")}</div></div><div class="tool-activity-status ${t.error?"error":"done"}">${t.error?"<span>Failed</span>":"<svg><use href=\"#i-check\"/></svg>"}</div></div><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></div>`).join("");
   const time=m.ts?`<div class="msg-time">${new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div>`:"";
-  const hadThink=/<think[\s>]/i.test(String(m.text||""));
+  const hadThink=/<(think|thinking|reasoning|thought)[\s>]/i.test(String(m.text||""));
   const reasoning=m.reasoning&&!hadThink?`<div class="reasoning">Reasoning · ${formatReasoningTime(m.reasoning)}</div>`:"";
   return `<div class="message ${m.role}">${files}${tools}<div class="bubble">${reasoning}${m.role==="assistant"?md(m.text,{reasoningDurationMs:m.reasoning}):esc(m.text||"")}</div>${time}</div>`;
 }
@@ -327,8 +332,16 @@ async function send(){
   const started=Date.now();
   try{
     compactIfNeeded();
-    // History must never contain <think> blocks — models reject foreign tags on the way back.
-    const strip=t=>String(t||"").replace(/<think\s*>[\s\S]*?<\/think\s*>/gi,"").replace(/<\/?think\s*>/gi,"").trim();
+    // History must never contain thinking blocks — models reject foreign tags on the way back.
+    const THINK_STRIP=[["think","think"],["thinking","thinking"],["reasoning","reasoning"],["thought","thought"]];
+    const strip=t=>{
+      let s=String(t||"");
+      for(const [open,close] of THINK_STRIP){
+        s=s.replace(new RegExp(`<${open}(\\s[^>]*)?>[\s\S]*?</${close}(\s[^>]*)?>`,"gi"),"");
+        s=s.replace(new RegExp(`</?${open}(\\s[^>]*)?>`,"gi"),"");
+      }
+      return s.trim();
+    };
     // History: everything before the current turn, text-only (attachments were sent in their own turns).
     const history=state.messages.slice(0,-1)
       .map(m=>({role:m.role,content:strip(m.text)}))
@@ -529,7 +542,7 @@ function toolPreview(name,input,result){
   const out=String(result||"");
   if(name==="list_files")return '<div class="tree-title">PROJECT ROOT</div><div class="tree">'+esc(makeTree(out))+'</div>';
   if(name==="search_files")return '<div class="tree-title">MATCHES</div><div class="tree">'+esc(out.split("\n").slice(0,20).join("\n")||"No matches")+'</div>';
-  if(input?.path||input?.url)return '<div class="tool-file-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#i-file"/></svg><span>'+esc(input.path||input.url)+"</span></div><pre>"+esc(out.slice(0,5000))+"</pre>";
+  // The file path is already in the card subtitle (.tool-activity-sub) — no badge.
   return '<pre>'+esc(out.slice(0,5000))+"</pre>";
 }
 function showToolActivity(name,input){
@@ -543,7 +556,7 @@ function showToolActivity(name,input){
     card.querySelector(".tool-preview").innerHTML=toolPreview(name,input,result);
     const st=card.querySelector(".tool-activity-status");
     st.className="tool-activity-status "+(error?"error":"done");
-    st.innerHTML="<span>"+(error?"Failed":"Done")+"</span>";
+    st.innerHTML=error?"<span>Failed</span>":'<svg><use href="#i-check"/></svg>';
     if(error)card.querySelector(".tool-activity-icon").style.color="#ff7279";
     chat.scrollTop=chat.scrollHeight;
   }};
