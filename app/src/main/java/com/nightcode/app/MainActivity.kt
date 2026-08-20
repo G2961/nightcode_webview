@@ -94,13 +94,18 @@ class MainActivity : ComponentActivity() {
         setContentView(webView)
 
         // env(safe-area-inset-*) is always 0 inside an Android WebView, so the system
-        // bar insets must be applied natively. Padding the WebView itself shifts the
-        // whole page (fixed composer included) below the status bar and above the
-        // navigation bar; the WebView background fills the bars seamlessly.
-        ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(0, bars.top, 0, bars.bottom)
-            WindowInsetsCompat.CONSUMED
+        // bar insets must be applied natively. We inject them as CSS variables that
+        // the page can read, instead of padding the WebView (which would push the
+        // status bar text into a clipped area).
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+            val top = bars.top
+            val bottom = bars.bottom
+            webView.evaluateJavascript(
+                "document.documentElement.style.setProperty('--sys-top','${top}px');" +
+                    "document.documentElement.style.setProperty('--sys-bottom','${bottom}px');"
+            ) {}
+            insets
         }
         webView.loadUrl("file:///android_asset/index.html")
 
