@@ -11,6 +11,8 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import java.net.HttpURLConnection
+import java.net.URL
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.core.view.ViewCompat
@@ -511,6 +513,50 @@ class MainActivity : ComponentActivity() {
             if (url.startsWith("https://") || url.startsWith("http://")) {
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
             }
+        }
+
+        /**
+         * Native HTTP for the page: the WebView origin is file:// ("null"), which API
+         * servers reject via CORS. HttpURLConnection speaks no CORS, sends no Origin
+         * and no preflight, so any Base URL works without a proxy.
+         */
+        @JavascriptInterface
+        fun httpRequest(method: String, url: String, headersJson: String, body: String, cb: String) {
+            Thread {
+                var code = 0
+                var respBody = ""
+                var error = false
+                try {
+                    val conn = URL(url).openConnection() as HttpURLConnection
+                    conn.requestMethod = method.uppercase()
+                    conn.connectTimeout = 30000
+                    // LLM generations can take minutes — generous read timeout.
+                    conn.readTimeout = 600000
+                    conn.instanceFollowRedirects = true
+                    try {
+                        val hdrs = org.json.JSONObject(headersJson)
+                        for (key in hdrs.keys()) conn.setRequestProperty(key, hdrs.getString(key))
+                    } catch (_: Exception) {}
+                    // Keep the transport simple: no transparent gzip to decode.
+                    if (conn.getRequestProperty("Accept-Encoding") == null) {
+                        conn.setRequestProperty("Accept-Encoding", "identity")
+                    }
+                    if (body.isNotEmpty()) {
+                        conn.doOutput = true
+                        val bytes = body.toByteArray(Charsets.UTF_8)
+                        conn.setFixedLengthStreamingMode(bytes.size)
+                        conn.outputStream.use { it.write(bytes) }
+                    }
+                    code = conn.responseCode
+                    val stream = if (code in 200..399) conn.inputStream else conn.errorStream
+                    respBody = stream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+                } catch (e: Exception) {
+                    respBody = e.message ?: e.toString()
+                    error = true
+                }
+                val payload = jsonString(respBody)
+                js("window.__httpResult && window.__httpResult(${jsonString(cb)}, $code, $payload, $error)")
+            }.start()
         }
     }
 

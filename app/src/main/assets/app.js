@@ -173,6 +173,29 @@ function showTyping(){
 }
 function removeTyping(){const t=$("typing");if(t)t.remove()}
 
+/* ── Native HTTP bridge (bypasses CORS entirely: no origin, no preflight) ── */
+const httpCbs={};let httpCbId=0;
+window.__httpResult=function(cbId,status,body,error){
+  const cb=httpCbs[cbId];if(!cb)return;
+  delete httpCbs[cbId];
+  cb({status,body,error:!!error});
+};
+function httpFetch(method,url,headers={},body){
+  return new Promise(resolve=>{
+    if(!window.Android||!Android.httpRequest){
+      // Browser fallback (dev in a normal browser): plain fetch with full error detail.
+      fetch(url,{method,headers,body:body||undefined})
+        .then(async r=>resolve({status:r.status,body:await r.text(),error:false}))
+        .catch(e=>resolve({status:0,body:String(e&&e.message||e),error:true}));
+      return;
+    }
+    const cbId="http"+(++httpCbId);
+    httpCbs[cbId]=resolve;
+    try{Android.httpRequest(method,url,JSON.stringify(headers),body||"",cbId)}
+    catch(e){delete httpCbs[cbId];resolve({status:0,body:String(e&&e.message||e),error:true})}
+  });
+}
+
 /* ── Android filesystem bridge ─────── */
 const fsCbs={};let fsCbId=0;
 window.__fsResult=function(cbId,result,error){
@@ -342,9 +365,10 @@ async function fetchModels(closeOnSuccess=false){
   $("settingsError").textContent="";
   if(!state.base){$("settingsError").textContent="Base URL is empty.";return}
   try{
-    const r=await fetch(state.base.replace(/\/$/,"")+"/v1/models",{headers:{"x-api-key":state.key,"anthropic-version":"2023-06-01"}});
-    const txt=await r.text(); if(!r.ok)throw Error(txt.slice(0,600));
-    const data=JSON.parse(txt).data||[];
+    const r=await httpFetch("GET",state.base.replace(/\/$/,"")+"/v1/models",{"x-api-key":state.key,"anthropic-version":"2023-06-01"});
+    if(r.error)throw Error("Network: "+r.body.slice(0,300));
+    if(r.status<200||r.status>=300)throw Error(r.body.slice(0,600));
+    const data=JSON.parse(r.body).data||[];
     state.models=data.map(x=>({id:x.id,name:x.display_name||x.id,provider:provider(x.id)}));
     if(!state.selected&&state.models[0])state.selected=state.models[0].id;
     save();renderModels();updateModelBtn();
@@ -395,22 +419,16 @@ async function send(){
       if(proj)body.tools=TOOLS;
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
       let r;
-      try{
-        r=await fetch(reqUrl,{method:"POST",headers:{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},body:JSON.stringify(body)});
-      }catch(netErr){
-        // Network-level failure: DNS, TLS, connection refused, CORS. No HTTP status exists.
-        console.error("[NightCode] network failure "+JSON.stringify({url:reqUrl,model:state.selected,name:netErr&&netErr.name,message:netErr&&netErr.message}));
-        throw Error("Network: "+(netErr&&netErr.message||netErr));
-      }
-      const txt=await r.text();
-      // WebView console prints objects as [object Object] — stringify everything.
+      r=await httpFetch("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify(body));
+      if(r.error)throw Error("Network: "+r.body.slice(0,1000));
+      const txt=r.body;
       console.log("[NightCode] /v1/messages response "+JSON.stringify({
         url:reqUrl,model:state.selected,modelInBody:body.model,
-        status:r.status,statusText:r.statusText,
-        contentType:r.headers.get("content-type"),
+        status:r.status,statusText:"",
+        contentType:"",
         bodyLength:txt.length,bodyPreview:txt.slice(0,2000)
       }));
-      if(!r.ok)throw Error(txt.slice(0,1000));
+      if(r.status<200||r.status>=300)throw Error(txt.slice(0,1000));
       const data=JSON.parse(txt);
       console.log("[NightCode] response content blocks "+JSON.stringify((data.content||[]).map(x=>({type:x.type,hasText:!!x.text,hasThinking:!!(x.thinking||x.reasoning_content)}))));
       const content=data.content||[];
