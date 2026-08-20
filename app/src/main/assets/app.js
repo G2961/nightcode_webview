@@ -532,29 +532,32 @@ const FILE_TOOLS=[
 ];
 const WEB_SEARCH_TOOL={name:"web_search",description:"Search the web for current information: documentation, recent events, library APIs, error messages. Returns titles, snippets and URLs.",input_schema:{type:"object",properties:{query:{type:"string",description:"Search query"}},required:["query"]}};
 
-/* Web search via DuckDuckGo. httpFetch (native bridge) has no CORS limits, so
-   lite.duckduckgo.com can be fetched directly; the Instant Answers JSON API is
-   the fallback when the HTML layout is unavailable. */
+/* Web search via Bing RSS (machine-readable, no captcha walls like DDG lite).
+   httpFetch (native bridge) has no CORS limits. DDG Instant Answers JSON stays
+   as a lightweight fallback for direct encyclopedia-style lookups. */
 async function runWebSearch(query){
   const q=String(query||"").trim();
   if(!q)return {result:"EMPTY_QUERY",error:true};
   const strip=s=>String(s).replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#x27;|&#39;/g,"'").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/\s+/g," ").trim();
   try{
-    const r=await httpFetch("GET","https://lite.duckduckgo.com/lite/?q="+encodeURIComponent(q),{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Safari/537.3"});
-    console.log("[NightCode] DDG lite "+JSON.stringify({status:r.status,error:r.error,bodyLength:(r.body||"").length,bodyStart:(r.body||"").slice(0,600)}));
+    const r=await httpFetch("GET","https://www.bing.com/search?q="+encodeURIComponent(q)+"&format=rss&count=8",{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Safari/537.3","Accept-Language":"en-US,en;q=0.9"});
+    console.log("[NightCode] Bing RSS "+JSON.stringify({status:r.status,error:r.error,bodyLength:(r.body||"").length}));
     if(!r.error&&r.status>=200&&r.status<300&&r.body){
-      const links=[...r.body.matchAll(/<a[^>]*class=["']result-link["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/g)];
-      const snippets=[...r.body.matchAll(/<td[^>]*class=["']result-snippet["'][^>]*>([\s\S]*?)<\/td>/g)];
+      const items=[...r.body.matchAll(/<item>([\s\S]*?)<\/item>/g)];
       const out=[];
-      for(let i=0;i<Math.min(links.length,8);i++){
-        out.push((i+1)+". "+strip(links[i][2])+"\n   URL: "+strip(links[i][1])+(snippets[i]?"\n   "+strip(snippets[i][1]):""));
+      for(const m of items){
+        const title=(m[1].match(/<title>([\s\S]*?)<\/title>/)||[])[1]||"";
+        const link=(m[1].match(/<link>([\s\S]*?)<\/link>/)||[])[1]||"";
+        const desc=(m[1].match(/<description>([\s\S]*?)<\/description>/)||[])[1]||"";
+        if(title||link)out.push((out.length+1)+". "+strip(title)+(link?"\n   URL: "+strip(link):"")+(desc?"\n   "+strip(desc):""));
+        if(out.length>=8)break;
       }
       if(out.length)return {result:out.join("\n\n").slice(0,6000),error:false};
     }
-  }catch(e){}
+  }catch(e){console.log("[NightCode] Bing RSS parse fail "+String(e&&e.message||e))}
   try{
     const r=await httpFetch("GET","https://api.duckduckgo.com/?q="+encodeURIComponent(q)+"&format=json&no_html=1&skip_disambig=1",{"User-Agent":"Mozilla/5.0"});
-    console.log("[NightCode] DDG ia "+JSON.stringify({status:r.status,error:r.error,bodyStart:(r.body||"").slice(0,400)}));
+    console.log("[NightCode] DDG ia "+JSON.stringify({status:r.status,error:r.error,bodyStart:(r.body||"").slice(0,300)}));
     if(!r.error&&r.body){
       const d=JSON.parse(r.body);
       const parts=[];
