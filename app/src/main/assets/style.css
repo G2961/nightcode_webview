@@ -19,7 +19,10 @@
 }
 
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#090a0c;color:var(--text);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overscroll-behavior:none}
+/* position:fixed kills the document scroller entirely: without it Android WebView
+   lets the user drag the whole page (fixed composer included) when the keyboard is open. */
+body{position:fixed;inset:0}
 button,input,textarea{font:inherit;color:inherit}
 button{border:0;cursor:pointer;background:none;padding:0}
 svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -42,7 +45,7 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .icon-btn:active{background:var(--surface-2);color:#fff}
 
 /* ── Chat area ───────────────────────── */
-.chat{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:10px 14px 185px;scroll-behavior:smooth}
+.chat{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:10px 14px 185px;scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
 .chat::-webkit-scrollbar{width:0}
 
 .welcome{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-bottom:30px}
@@ -85,6 +88,9 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .file-card>svg{width:18px;height:18px;color:#a9b6ff;min-width:18px}
 .file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:52vw}
 .file-card small{color:var(--text-3);font-size:10px}
+.file-card.image-card{flex-direction:column;align-items:flex-start;gap:7px;padding:7px}
+.file-card.image-card img{display:block;max-width:min(240px,60vw);max-height:240px;border-radius:11px}
+.file-card.image-card .file-name{max-width:240px;font-size:10.5px;color:var(--text-2)}
 
 /* ── Composer ────────────────────────── */
 .composer-wrap{position:fixed;left:0;right:0;bottom:0;z-index:10;padding:0 12px calc(10px + env(safe-area-inset-bottom) + var(--kb,0px));background:linear-gradient(transparent,rgba(9,10,12,.9) 26%,#090a0c);pointer-events:none}
@@ -106,7 +112,8 @@ textarea::placeholder{color:var(--text-3)}
 
 .attachments{display:flex;gap:7px;overflow-x:auto;padding:0 2px 8px}
 .attachments::-webkit-scrollbar{height:0}
-.attachment{display:flex;align-items:center;gap:6px;background:rgba(28,31,39,.95);border:1px solid var(--border-strong);border-radius:11px;padding:7px 10px;font-size:11px;white-space:nowrap;max-width:180px}
+.attachment{display:flex;align-items:center;gap:6px;background:rgba(28,31,39,.95);border:1px solid var(--border-strong);border-radius:11px;padding:5px 8px 5px 6px;font-size:11px;white-space:nowrap;max-width:180px}
+.attachment img{width:26px;height:26px;min-width:26px;border-radius:7px;object-fit:cover}
 .attachment>svg{width:13px;height:13px;color:#a9b6ff;min-width:13px}
 .attachment>span{overflow:hidden;text-overflow:ellipsis;max-width:110px}
 .attachment button{display:grid;place-items:center;color:var(--text-3)}

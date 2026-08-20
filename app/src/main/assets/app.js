@@ -12,7 +12,21 @@ const state={
 };
 
 function save(){
-  localStorage.setItem("messages",JSON.stringify(state.messages));
+  try{
+    localStorage.setItem("messages",JSON.stringify(state.messages));
+  }catch(e){
+    // Images blow past the ~5MB localStorage quota. Degrade gracefully:
+    // newest messages keep images, older ones keep only names, so history survives.
+    let msgs=state.messages.slice();
+    let ok=false;
+    for(let drop=0;drop<msgs.length&&!ok;drop++){
+      const attempt=msgs.map((m,i)=>i<msgs.length-1-drop?{...m,attachments:(m.attachments||[]).map(a=>({name:a.name,kind:a.kind}))}:m);
+      try{localStorage.setItem("messages",JSON.stringify(attempt));ok=true}catch(_){}
+    }
+    if(!ok){
+      try{localStorage.setItem("messages","[]")}catch(_){}
+    }
+  }
   localStorage.setItem("models",JSON.stringify(state.models));
   localStorage.setItem("model",state.selected);
   localStorage.setItem("base",state.base);
@@ -77,7 +91,14 @@ function welcomeHtml(){
   </section>`;
 }
 function messageHtml(m){
-  const files=(m.attachments||[]).map(a=>`<div class="file-card"><svg><use href="#i-file"/></svg><span class="file-name">${esc(a.name)}</span><small>${esc(a.mime||"file")}</small></div>`).join("");
+  const files=(m.attachments||[]).map(a=>{
+    if(a.kind==="image"&&a.dataUrl)return `<div class="file-card image-card"><img src="${a.dataUrl}"><span class="file-name">${esc(a.name)}</span></div>`;
+    const meta=a.kind==="image"?"image":(a.mime||"file");
+    return `<div class="file-card"><svg><use href="#i-file"/></svg><span class="file-name">${esc(a.name)}</span><small>${esc(meta)}</small></div>`;
+  }).join("");
+  const body=m.text||m.attachments&&m.attachments.length?"":"";
+  const showBubble=m.text||m.role!=="user";
+  if(!showBubble)return `<div class="message ${m.role}">${files}</div>`;
   const tools=(m.tools||[]).map(t=>`<div class="tool-activity"><div class="tool-activity-head"><div class="tool-activity-icon"${t.error?' style="color:#ff7279"':""}>${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolLabel(t.name))}</div><div class="tool-activity-sub">${esc(toolTarget(t.input)||"")}</div></div><div class="tool-activity-status ${t.error?"error":"done"}"><span>${t.error?"Failed":"Done"}</span></div></div><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></div>`).join("");
   const time=m.ts?`<div class="msg-time">${new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div>`:"";
   const hadThink=/<think[\s>]/i.test(String(m.text||""));
@@ -131,7 +152,12 @@ window.__onProjectPicked=function(name){
 window.__onFilesPicked=function(files){
   if(!files||!files.length)return;
   for(const f of files){
-    state.attachments.push({name:f.name,mime:"file/picked",data:f.b64});
+    const isImage=/\.(png|jpe?g|webp|gif)$/i.test(f.name);
+    if(isImage){
+      state.attachments.push({name:f.name,kind:"image",data:f.b64,dataUrl:"data:image/jpeg;base64,"+f.b64});
+    }else{
+      state.attachments.push({name:f.name,kind:"text",data:f.b64});
+    }
   }
   renderAttachments();
 };
@@ -153,7 +179,10 @@ function addMessage(role,text,attachments=[]){
   save();render();
 }
 function renderAttachments(){
-  $("attachments").innerHTML=state.attachments.map((a,i)=>`<div class="attachment"><svg><use href="#i-file"/></svg><span>${esc(a.name)}</span><button onclick="removeAttachment(${i})" aria-label="Remove"><svg><use href="#i-close"/></svg></button></div>`).join("");
+  $("attachments").innerHTML=state.attachments.map((a,i)=>{
+    const thumb=a.kind==="image"&&a.dataUrl?`<img src="${a.dataUrl}">`:'<svg><use href="#i-file"/></svg>';
+    return `<div class="attachment">${thumb}<span>${esc(a.name)}</span><button onclick="removeAttachment(${i})" aria-label="Remove"><svg><use href="#i-close"/></svg></button></div>`;
+  }).join("");
 }
 function removeAttachment(i){state.attachments.splice(i,1);renderAttachments()}
 function openFiles(){
@@ -225,7 +254,17 @@ async function send(){
     compactIfNeeded();
     // History must never contain <think> blocks — models reject foreign tags on the way back.
     const strip=t=>String(t||"").replace(/<think\s*>[\s\S]*?<\/think\s*>/gi,"").replace(/<\/?think\s*>/gi,"").trim();
-    const messages=state.messages.map(m=>({role:m.role,content:strip(m.text)})).filter(m=>m.content);
+    // History: everything before the current turn, text-only (attachments were sent in their own turns).
+    const history=state.messages.slice(0,-1)
+      .map(m=>({role:m.role,content:strip(m.text)}))
+      .filter(m=>m.content);
+    const messages=[];
+    for(const m of history){
+      const prev=messages[messages.length-1];
+      if(prev&&prev.role===m.role){prev.content+="\n\n"+m.content}  // merge adjacent same-role turns
+      else messages.push(m);
+    }
+    messages.push({role:"user",content:buildUserContent(prompt,at)});
     const proj=hasProject();
     const system=(proj
       ?"You are NightCode, a local AI coding agent. You work on the user's selected project through tools. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded."
@@ -278,6 +317,33 @@ function compactNow(show=true){
   state.summary=(state.summary+"\n"+old).slice(-12000);
   state.messages=state.messages.slice(-4);save();render();if(show)closeSheets();
 }
+function b64ToText(b64){
+  try{
+    const bin=atob(b64);
+    const bytes=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+    return new TextDecoder("utf-8",{fatal:false}).decode(bytes);
+  }catch(e){return ""}
+}
+function guessMime(name){
+  const ext=(name.split(".").pop()||"").toLowerCase();
+  return ({jpg:"image/jpeg",jpeg:"image/jpeg",png:"image/png",webp:"image/webp",gif:"image/gif"}[ext])||"image/png";
+}
+function buildUserContent(prompt,attachments){
+  const content=[];
+  if(prompt)content.push({type:"text",text:prompt});
+  for(const a of attachments||[]){
+    if(a.kind==="image"&&a.data){
+      content.push({type:"image",source:{type:"base64",media_type:guessMime(a.name),data:a.data}});
+    }else if(a.data){
+      content.push({type:"text",text:"Attached file: "+a.name+"\n\n"+b64ToText(a.data).slice(0,50000)});
+    }else{
+      content.push({type:"text",text:"Attached file: "+a.name});
+    }
+  }
+  return content;
+}
+
 /* ── Agent tool execution via Android FS bridge ── */
 const TOOLS=[
   {name:"list_files",description:"List files in the connected project folder.",input_schema:{type:"object",properties:{},required:[]}},
@@ -377,9 +443,9 @@ initProjectState();render();renderAttachments();resizeInput();updateModelBtn();r
 
 /* ── Keyboard-aware layout ──────────── */
 function syncKeyboard(){
-  // interactive-widget=resizes-content makes Android resize the layout viewport,
-  // so the app naturally compresses. All we do here is keep the composer
-  // pinned above the keyboard and the chat scrolled to the latest message.
+  // interactive-widget=resizes-content + adjustResize resize the layout viewport,
+  // so the app naturally compresses. We only pin the composer above the keyboard
+  // and keep the chat pinned to the latest message.
   const vv=window.visualViewport;
   const kb=vv?Math.max(0,window.innerHeight-vv.height-vv.offsetTop):0;
   document.documentElement.style.setProperty("--kb",kb+"px");
@@ -388,3 +454,10 @@ function syncKeyboard(){
 }
 window.visualViewport&&window.visualViewport.addEventListener("resize",syncKeyboard);
 window.addEventListener("resize",syncKeyboard);
+// Block the rubber-band drag of the whole document: with body{position:fixed}
+// Android WebView can still pan the visual viewport on touchmove. preventDefault
+// on non-scrollable areas stops the page itself from being dragged around.
+document.addEventListener("touchmove",e=>{
+  if(e.target.closest&&e.target.closest(".chat,.sheet,#recent,textarea,.tool-preview pre,.reasoning-block pre,.code-block"))return;
+  e.preventDefault();
+},{passive:false});
