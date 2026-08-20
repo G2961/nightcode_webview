@@ -525,15 +525,20 @@ function syncKeyboard(){
 }
 window.visualViewport&&window.visualViewport.addEventListener("resize",syncKeyboard);
 window.addEventListener("resize",syncKeyboard);
-// Lock the page pan dead. The browser's native scrolling is allowed ONLY when the
-// touch started inside an element that can actually scroll right now (chat feed,
+// Lock the page pan dead. Native scrolling is allowed ONLY when the touch
+// started inside an element that can actually scroll right now (chat feed,
 // sheets, code blocks, an overflowing textarea). Everything else — especially
 // the composer and its textarea — stays glued in place.
 const SCROLLABLE=".chat,.sheet,#recent,textarea,pre";
 document.addEventListener("touchmove",e=>{
   let el=e.target;
   while(el&&el!==document.body){
-    if(el.matches&&el.matches(SCROLLABLE)&&el.scrollHeight>el.clientHeight+4)return;
+    if(el.matches&&el.matches(SCROLLABLE)){
+      const cs=getComputedStyle(el);
+      if(cs.overflowY==="auto"||cs.overflowY==="scroll"){
+        if(el.scrollHeight>el.clientHeight+4)return;  // it really can scroll
+      }
+    }
     el=el.parentElement;
   }
   e.preventDefault();
