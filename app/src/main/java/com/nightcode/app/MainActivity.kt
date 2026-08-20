@@ -38,6 +38,10 @@ class MainActivity : ComponentActivity() {
             settings.databaseEnabled = true
             settings.allowFileAccess = true
             settings.allowContentAccess = true
+            // The UI is loaded from file:///android_asset, so its origin is "null".
+            // Without universal access the WebView blocks API calls (fetch) via CORS.
+            settings.allowUniversalAccessFromFileURLs = true
+            settings.allowFileAccessFromFileURLs = true
             settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
             settings.loadsImagesAutomatically = true
             settings.mediaPlaybackRequiresUserGesture = false
@@ -65,7 +69,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            webChromeClient = WebChromeClient()
+            webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
+                    android.util.Log.d(
+                        "NightCodeJS",
+                        "${message.message()} (line ${message.lineNumber()})"
+                    )
+                    return true
+                }
+            }
         }
 
         setContentView(webView)
