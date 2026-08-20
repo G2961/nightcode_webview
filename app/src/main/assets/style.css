@@ -32,7 +32,7 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
   touch-action:pan-y}
 
 /* ── Top bar ─────────────────────────── */
-.topbar{height:60px;min-height:60px;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;padding-top:calc(8px + var(--sys-status,0px));position:relative;z-index:5;touch-action:none}
+.topbar{height:60px;min-height:60px;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;padding-top:calc(15px + var(--sys-status,0px));position:relative;z-index:5;touch-action:none}
 .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;letter-spacing:.2px}
 .brand-logo{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;color:#dfe3ff;
   background:linear-gradient(135deg,rgba(124,140,255,.28),rgba(163,124,255,.16));
@@ -127,7 +127,7 @@ textarea::placeholder{color:var(--text-3)}
 .attachment button svg{width:11px;height:11px;color:var(--text-2)}
 
 /* ── Drawer ──────────────────────────── */
-.drawer{position:fixed;z-index:20;left:0;top:0;bottom:0;width:min(86vw,360px);display:flex;flex-direction:column;background:#101216;border-right:1px solid var(--border);transform:translateX(-102%);transition:transform .26s cubic-bezier(.32,.72,.24,1);padding:calc(12px + env(safe-area-inset-top)) 14px 14px;box-shadow:8px 0 40px rgba(0,0,0,.4)}
+.drawer{position:fixed;z-index:20;left:0;top:0;bottom:0;width:min(86vw,360px);display:flex;flex-direction:column;background:#101216;border-right:1px solid var(--border);transform:translateX(-102%);transition:transform .26s cubic-bezier(.32,.72,.24,1);padding:calc(15px + var(--sys-status,0px)) 14px calc(14px + var(--sys-nav,0px));box-shadow:8px 0 40px rgba(0,0,0,.4)}
 .drawer.open{transform:none}
 .drawer-head{height:44px;display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
 .drawer-head b{font-size:15px}
@@ -147,7 +147,7 @@ textarea::placeholder{color:var(--text-3)}
 .secondary:active{transform:scale(.98)}
 
 /* ── Bottom sheets ───────────────────── */
-.sheet{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));max-height:82vh;overflow:auto;background:#12141a;border:1px solid var(--border-strong);border-radius:var(--radius-lg);padding:14px 16px 16px;box-shadow:0 20px 60px rgba(0,0,0,.6);transform:translateY(110%);transition:transform .32s cubic-bezier(.32,.72,.24,1)}
+.sheet{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(10px + max(var(--sys-nav,0px),var(--sys-ime,0px)));max-height:82vh;overflow:auto;background:#12141a;border:1px solid var(--border-strong);border-radius:var(--radius-lg);padding:14px 16px 16px;box-shadow:0 20px 60px rgba(0,0,0,.6);transform:translateY(110%);transition:transform .32s cubic-bezier(.32,.72,.24,1)}
 .sheet.open{transform:none}
 .sheet::before{content:"";display:block;width:36px;height:4px;border-radius:2px;background:#2c3038;margin:0 auto 12px}
 .sheet::-webkit-scrollbar{width:0}
