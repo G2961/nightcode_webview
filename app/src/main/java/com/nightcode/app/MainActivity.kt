@@ -28,8 +28,9 @@ class MainActivity : ComponentActivity() {
     private var workspaceRoot: DocumentFile? = null
     private var workspaceName: String = ""
 
-    @Volatile private var sysTop = 0
-    @Volatile private var sysBottom = 0
+    @Volatile private var sysStatus = 0
+    @Volatile private var sysNav = 0
+    @Volatile private var sysIme = 0
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -110,14 +111,12 @@ class MainActivity : ComponentActivity() {
         // Native setPadding is intentionally NOT used: applying both would double
         // the offset wherever the native path does work.
         ViewCompat.setOnApplyWindowInsetsListener(webView) { _, insets ->
-            val bars = insets.getInsets(
-                WindowInsetsCompat.Type.displayCutout() or
-                    WindowInsetsCompat.Type.statusBars() or
-                    WindowInsetsCompat.Type.navigationBars() or
-                    WindowInsetsCompat.Type.ime()
-            )
-            sysTop = bars.top
-            sysBottom = bars.bottom
+            // Split insets: displayCutout OR statusBars can double-count on some
+            // devices, and nav bar + IME must never be summed — the composer takes
+            // whichever is larger (see margin-bottom:max() in style.css).
+            sysStatus = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+            sysNav = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+            sysIme = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
             pushSysInsets()
             insets
         }
@@ -141,8 +140,9 @@ class MainActivity : ComponentActivity() {
 
     private fun pushSysInsets() {
         webView.evaluateJavascript(
-            "document.documentElement.style.setProperty('--sys-top','${sysTop}px');" +
-                "document.documentElement.style.setProperty('--sys-bottom','${sysBottom}px');",
+            "document.documentElement.style.setProperty('--sys-status','${sysStatus}px');" +
+                "document.documentElement.style.setProperty('--sys-nav','${sysNav}px');" +
+                "document.documentElement.style.setProperty('--sys-ime','${sysIme}px');",
             null
         )
     }
