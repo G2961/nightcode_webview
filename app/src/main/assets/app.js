@@ -132,17 +132,15 @@ function messageHtml(m){
   if(!showBubble)return `<div class="message ${m.role}">${files}</div>`;
   const tools=(m.tools||[]).map(t=>`<div class="tool-activity"><div class="tool-activity-head"><div class="tool-activity-icon"${t.error?' style="color:#ff7279"':""}>${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolLabel(t.name))}</div><div class="tool-activity-sub">${esc(toolTarget(t.input)||"")}</div></div><div class="tool-activity-status ${t.error?"error":"done"}">${t.error?"<span>Failed</span>":"<svg><use href=\"#i-check\"/></svg>"}</div></div><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></div>`).join("");
   const time=m.ts?`<div class="msg-time">${new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div>`:"";
-  // Reasoning renders as its own collapsible card ABOVE the bubble (agent-style),
-  // never mixed into the answer text.
+  // Reasoning renders as its own tool-activity-style card ABOVE the bubble —
+  // same visual language as the agent's tool cards (icon, title, sub, chevron).
   let reasoningHtml="";
   if(m.role==="assistant"){
     const {thinking,rest}=extractReasoning(m.text);
     const dur=m.reasoning?formatReasoningTime(m.reasoning):null;
     if(thinking){
-      reasoningHtml=`<details class="reasoning-block"><summary><span class="reasoning-label">Reasoning</span><span class="reasoning-time">Thought for ${dur||"a moment"}</span></summary><pre>${esc(thinking)}</pre></details>`;
+      reasoningHtml=`<details class="tool-activity reasoning-card"><summary class="tool-activity-head"><div class="tool-activity-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4.5 4.5 0 0 0-4.5 4.5c0 .7.2 1.4.5 2A4 4 0 0 0 5 13.5 4 4 0 0 0 9 17.5h.5A3.5 3.5 0 0 0 12 20a3.5 3.5 0 0 0 2.5-2.5H15a4 4 0 0 0 4-4 4 4 0 0 0-3-3.8c.3-.6.5-1.3.5-2A4.5 4.5 0 0 0 12 3z"/></svg></div><div class="tool-activity-text"><div class="tool-activity-title">Thinking</div><div class="tool-activity-sub">Thought for ${dur||"a moment"}</div></div><div class="reasoning-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></summary><div class="tool-preview"><pre>${esc(thinking)}</pre></div></details>`;
       m._cleanText=rest;
-    }else if(m.reasoning){
-      reasoningHtml=`<div class="reasoning">Reasoning · ${dur}</div>`;
     }
   }
   const bodyText=m.role==="assistant"?(m._cleanText!==undefined?m._cleanText:m.text):m.text;

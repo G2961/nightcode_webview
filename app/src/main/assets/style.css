@@ -218,6 +218,15 @@ code.inline-code{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,
 .reasoning-block .reasoning-time{color:#737b89}
 .reasoning-block pre{margin:0;padding:9px 11px 11px;border-top:1px solid #242830;background:#0b0d10;color:#aeb7c7;font:10px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto}
 
+/* Reasoning as an agent-style card, same family as tool-activity */
+.reasoning-card{width:min(94%,560px);border:1px solid #2a2f37;background:linear-gradient(180deg,#15181d,#111318);border-radius:15px;overflow:hidden;box-shadow:0 8px 26px rgba(0,0,0,.27);margin:2px 0 8px}
+.reasoning-card summary{list-style:none;cursor:pointer}
+.reasoning-card summary::-webkit-details-marker{display:none}
+.reasoning-card .reasoning-chevron{color:#777f8d;transition:transform .18s ease;display:grid;place-items:center;margin-left:auto}
+.reasoning-card .reasoning-chevron svg{width:16px;height:16px}
+.reasoning-card[open] .reasoning-chevron{transform:rotate(180deg)}
+.reasoning-card .tool-preview pre{white-space:pre-wrap}
+
 /* ── Markdown ───────────────────────── */
 .markdown{white-space:normal;overflow-wrap:anywhere}
 .markdown p{margin:0 0 9px}.markdown p:last-child{margin-bottom:0}
