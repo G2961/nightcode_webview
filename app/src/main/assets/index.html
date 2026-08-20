@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover,interactive-widget=resizes-content">
 <meta name="theme-color" content="#090a0c">
 <title>NightCode</title>
 <link rel="stylesheet" href="style.css">
@@ -48,9 +48,9 @@
         <span class="quick-text"><b>New chat</b><small>Start a fresh conversation</small></span>
         <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
       </button>
-      <button class="quick">
+      <button class="quick" id="openProjectCard">
         <span class="quick-ico"><svg><use href="#i-folder"/></svg></span>
-        <span class="quick-text"><b>Open project</b><small>Continue coding</small></span>
+        <span class="quick-text"><b>Open project</b><small id="openProjectSub">Continue coding</small></span>
         <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
       </button>
     </section>
@@ -72,10 +72,10 @@
       <button onclick="openFiles()"><svg><use href="#i-image"/></svg><small>Photos</small></button>
       <button onclick="openFiles()"><svg><use href="#i-file"/></svg><small>Files</small></button>
     </div>
-    <button class="sheet-row"><span class="row-ico"><svg><use href="#i-folder"/></svg></span>Project folder<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
-    <button class="sheet-row"><span class="row-ico"><svg><use href="#i-globe"/></svg></span>Web search<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
-    <button class="sheet-row"><span class="row-ico"><svg><use href="#i-file"/></svg></span>Add to project<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
-    <button class="sheet-row"><span class="row-ico"><svg><use href="#i-sliders"/></svg></span>Tool access<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <button class="sheet-row" id="rowProjectFolder"><span class="row-ico"><svg><use href="#i-folder"/></svg></span>Project folder<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <button class="sheet-row" id="rowWebSearch"><span class="row-ico"><svg><use href="#i-globe"/></svg></span>Web search<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <button class="sheet-row" id="rowAddToProject"><span class="row-ico"><svg><use href="#i-file"/></svg></span>Add to project<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <button class="sheet-row" id="rowToolAccess"><span class="row-ico"><svg><use href="#i-sliders"/></svg></span>Tool access<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
   </div>
 
   <div id="settingsSheet" class="sheet">

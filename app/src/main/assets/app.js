@@ -7,7 +7,8 @@ const state={
   key:localStorage.getItem("key")||"",
   summary:localStorage.getItem("summary")||"",
   settings:JSON.parse(localStorage.getItem("settings")||'{"input":128000,"output":6000,"auto":true,"threshold":80}'),
-  attachments:[]
+  attachments:[],
+  projectName:""
 };
 
 function save(){
@@ -58,6 +59,7 @@ function formatReasoningTime(ms){
   return sec+"s";
 }
 function welcomeHtml(){
+  const projectSub=state.projectName?"Connected: "+esc(state.projectName):"Continue coding";
   return `<section id="welcome" class="welcome">
     <div class="star"><svg><use href="#i-moon"/></svg></div>
     <h1>Hello, night owl</h1>
@@ -67,9 +69,9 @@ function welcomeHtml(){
       <span class="quick-text"><b>New chat</b><small>Start a fresh conversation</small></span>
       <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
     </button>
-    <button class="quick">
+    <button class="quick" id="openProjectCard">
       <span class="quick-ico"><svg><use href="#i-folder"/></svg></span>
-      <span class="quick-text"><b>Open project</b><small>Continue coding</small></span>
+      <span class="quick-text"><b>Open project</b><small id="openProjectSub">${projectSub}</small></span>
       <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
     </button>
   </section>`;
@@ -99,6 +101,47 @@ function showTyping(){
   chat.scrollTop=chat.scrollHeight;
 }
 function removeTyping(){const t=$("typing");if(t)t.remove()}
+
+/* ── Android filesystem bridge ─────── */
+const fsCbs={};let fsCbId=0;
+window.__fsResult=function(cbId,result,error){
+  const cb=fsCbs[cbId];if(!cb)return;
+  delete fsCbs[cbId];
+  cb(result,error);
+};
+function fsCall(method,...args){
+  return new Promise(resolve=>{
+    if(!window.Android||!Android[method]){resolve("NO_BRIDGE",true);return}
+    const cbId="fs"+(++fsCbId);
+    fsCbs[cbId]=(result,error)=>resolve({result,error:!!error});
+    try{Android[method](...args,cbId)}catch(e){delete fsCbs[cbId];resolve({result:String(e),error:true})}
+  });
+}
+async function openProject(){
+  if(window.Android&&Android.openProjectPicker){Android.openProjectPicker()}
+  else alert("Project folders are available in the Android app.");
+}
+window.__onProjectPicked=function(name){
+  if(name){
+    state.projectName=name;localStorage.setItem("projectName",name);
+    addMessage("assistant",`Connected to project **${name}**. I can now read, search and edit files in it.`);
+  }
+  render();
+};
+window.__onFilesPicked=function(files){
+  if(!files||!files.length)return;
+  for(const f of files){
+    state.attachments.push({name:f.name,mime:"file/picked",data:f.b64});
+  }
+  renderAttachments();
+};
+function initProjectState(){
+  if(window.Android&&Android.hasProject&&Android.hasProject()){
+    state.projectName=Android.getProjectName?Android.getProjectName():"project";
+  }else{
+    state.projectName=localStorage.getItem("projectName")||"";
+  }
+}
 function renderRecent(){
   $("recent").innerHTML='<div class="recent-empty"><svg><use href="#i-chat"/></svg>No saved chats yet</div>';
 }
@@ -180,16 +223,22 @@ async function send(){
   try{
     compactIfNeeded();
     // History must never contain <think> blocks — models reject foreign tags on the way back.
-    const messages=state.messages.map(m=>({role:m.role,content:String(m.text||"").replace(/<think\s*>[\s\S]*?<\/think\s*>/gi,"").replace(/<\/?think\s*>/gi,"").trim()})).filter(m=>m.content);
-    const system=state.summary?`You are NightCode, a helpful AI coding assistant.\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"You are NightCode, a helpful AI coding assistant. Maintain continuity with the supplied conversation.";
+    const strip=t=>String(t||"").replace(/<think\s*>[\s\S]*?<\/think\s*>/gi,"").replace(/<\/?think\s*>/gi,"").trim();
+    const messages=state.messages.map(m=>({role:m.role,content:strip(m.text)})).filter(m=>m.content);
+    const proj=hasProject();
+    const system=(proj
+      ?"You are NightCode, a local AI coding agent. You work on the user's selected project through tools. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded."
+      :"You are NightCode, a helpful AI coding assistant. There is no project folder connected, so answer normally without assuming access to local files or tools.")
+      +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
     let final="";const toolCalls=[];
-    for(let turn=0;turn<6;turn++){
+    for(let turn=0;turn<8;turn++){
       const body={model:state.selected,max_tokens:Number(state.settings.output)||6000,system,messages};
+      if(proj)body.tools=TOOLS;
       const r=await fetch(state.base.replace(/\/$/,"")+"/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},body:JSON.stringify(body)});
       const txt=await r.text();if(!r.ok)throw Error(txt.slice(0,1000));
       const data=JSON.parse(txt);
       const content=data.content||[];
-      const toolUses=content.filter(x=>x.type==="tool_use");
+      const toolUses=proj?content.filter(x=>x.type==="tool_use"):[];
       const text=content.filter(x=>x.type==="text").map(x=>x.text).join("\n");
       if(text)final+=(final?"\n\n":"")+text;
       if(!toolUses.length)break;
@@ -197,10 +246,14 @@ async function send(){
       const results=[];
       for(const u of toolUses){
         const activity=showToolActivity(u.name,u.input||{});
-        const msg="Tool '"+u.name+"' is not available in NightCode WebView. Respond using the conversation instead.";
-        activity.update(msg,true);
-        toolCalls.push({name:u.name,input:u.input||{},result:msg,error:true});
-        results.push({type:"tool_result",tool_use_id:u.id,is_error:true,content:msg});
+        let out,err=false;
+        try{
+          const res=await runTool(u.name,u.input||{});
+          out=res.result;err=res.error;
+          activity.update(out,err);
+        }catch(e){out=String(e.message||e);err=true;activity.update(out,true)}
+        toolCalls.push({name:u.name,input:u.input||{},result:String(out),error:err});
+        results.push({type:"tool_result",tool_use_id:u.id,is_error:err,content:String(out)});
       }
       messages.push({role:"user",content:results});
       showTyping();
@@ -224,6 +277,30 @@ function compactNow(show=true){
   state.summary=(state.summary+"\n"+old).slice(-12000);
   state.messages=state.messages.slice(-4);save();render();if(show)closeSheets();
 }
+/* ── Agent tool execution via Android FS bridge ── */
+const TOOLS=[
+  {name:"list_files",description:"List files in the connected project folder.",input_schema:{type:"object",properties:{},required:[]}},
+  {name:"read_file",description:"Read a text file from the project.",input_schema:{type:"object",properties:{path:{type:"string"}},required:["path"]}},
+  {name:"search_files",description:"Search text inside project files. Use this before editing to find symbols or references.",input_schema:{type:"object",properties:{query:{type:"string"},path:{type:"string"}},required:["query"]}},
+  {name:"write_file",description:"Create or replace a text file in the project.",input_schema:{type:"object",properties:{path:{type:"string"},content:{type:"string"}},required:["path","content"]}},
+  {name:"create_directory",description:"Create a directory in the project.",input_schema:{type:"object",properties:{path:{type:"string"}},required:["path"]}},
+  {name:"rename_file",description:"Rename or move a file within the project.",input_schema:{type:"object",properties:{from:{type:"string"},to:{type:"string"}},required:["from","to"]}},
+  {name:"delete_file",description:"Delete a file from the project. Only use when the user explicitly asks for deletion.",input_schema:{type:"object",properties:{path:{type:"string"}},required:["path"]}}
+];
+async function runTool(name,input){
+  if(name==="list_files")return fsCall("fsList");
+  if(name==="read_file")return fsCall("fsRead",input.path);
+  if(name==="search_files")return fsCall("fsSearch",input.query);
+  if(name==="write_file")return fsCall("fsWrite",input.path,btoa(unescape(encodeURIComponent(String(input.content||"")))));
+  if(name==="create_directory")return fsCall("fsMkdir",input.path);
+  if(name==="rename_file")return fsCall("fsRename",input.from,input.to);
+  if(name==="delete_file")return fsCall("fsDelete",input.path);
+  return {result:"UNKNOWN_TOOL",error:true};
+}
+function hasProject(){
+  return !!(window.Android&&Android.hasProject&&Android.hasProject());
+}
+
 function resizeInput(){$("input").style.height="auto";$("input").style.height=Math.min($("input").scrollHeight,150)+"px"}
 
 /* ── Tool activity cards ────────────── */
@@ -275,6 +352,11 @@ $("closeDrawer").onclick=()=>{$("drawer").classList.remove("open");$("scrim").cl
 $("scrim").onclick=()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")}
 $("drawerNew").onclick=()=>{newChat();$("closeDrawer").click()}
 $("addBtn").onclick=()=>openSheet("addSheet")
+$("rowProjectFolder").onclick=()=>{closeSheets();openProject()}
+$("rowWebSearch").onclick=()=>{closeSheets();$("input").focus()}
+$("rowAddToProject").onclick=()=>{closeSheets();openProject()}
+$("rowToolAccess").onclick=()=>{closeSheets();openSheet("contextSheet")}
+document.addEventListener("click",e=>{const card=e.target.closest("#openProjectCard");if(card)openProject()});
 $("modelBtn").onclick=()=>{openSheet("modelSheet");renderModels()}
 $("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key}
 $("saveSettings").onclick=()=>{state.base=$("baseUrl").value.trim();state.key=$("apiKey").value.trim();save();fetchModels()}
@@ -286,4 +368,18 @@ $("compactNow").onclick=()=>compactNow(true)
 $("sendBtn").onclick=send
 $("input").addEventListener("input",resizeInput)
 $("input").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}})
-render();renderAttachments();resizeInput();updateModelBtn();renderRecent();
+initProjectState();render();renderAttachments();resizeInput();updateModelBtn();renderRecent();
+
+/* ── Keyboard-aware layout ──────────── */
+function syncKeyboard(){
+  // interactive-widget=resizes-content makes Android resize the layout viewport,
+  // so the app naturally compresses. All we do here is keep the composer
+  // pinned above the keyboard and the chat scrolled to the latest message.
+  const vv=window.visualViewport;
+  const kb=vv?Math.max(0,window.innerHeight-vv.height-vv.offsetTop):0;
+  document.documentElement.style.setProperty("--kb",kb+"px");
+  const chat=$("chat");
+  if(chat)chat.scrollTop=chat.scrollHeight;
+}
+window.visualViewport&&window.visualViewport.addEventListener("resize",syncKeyboard);
+window.addEventListener("resize",syncKeyboard);
