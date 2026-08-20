@@ -312,16 +312,17 @@ async function send(){
         r=await fetch(reqUrl,{method:"POST",headers:{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},body:JSON.stringify(body)});
       }catch(netErr){
         // Network-level failure: DNS, TLS, connection refused, CORS. No HTTP status exists.
-        console.error("[NightCode] network failure",{url:reqUrl,model:state.selected,name:netErr&&netErr.name,message:netErr&&netErr.message});
+        console.error("[NightCode] network failure "+JSON.stringify({url:reqUrl,model:state.selected,name:netErr&&netErr.name,message:netErr&&netErr.message}));
         throw Error("Network: "+(netErr&&netErr.message||netErr));
       }
       const txt=await r.text();
-      console.log("[NightCode] /v1/messages response",{
+      // WebView console prints objects as [object Object] — stringify everything.
+      console.log("[NightCode] /v1/messages response "+JSON.stringify({
         url:reqUrl,model:state.selected,modelInBody:body.model,
         status:r.status,statusText:r.statusText,
         contentType:r.headers.get("content-type"),
         bodyLength:txt.length,bodyPreview:txt.slice(0,2000)
-      });
+      }));
       if(!r.ok)throw Error(txt.slice(0,1000));
       const data=JSON.parse(txt);
       const content=data.content||[];
@@ -352,7 +353,7 @@ async function send(){
     save();render();
   }catch(e){
     removeTyping();
-    console.error("[NightCode] send failed",{name:e&&e.name,message:e&&e.message,stack:e&&e.stack});
+    console.error("[NightCode] send failed "+JSON.stringify({name:e&&e.name,message:String(e&&e.message||e).slice(0,1500),stack:String(e&&e.stack||"").slice(0,800)}));
     addMessage("assistant","Error: "+(e.message||e));
   }
   finally{$("sendBtn").disabled=false}
