@@ -28,13 +28,14 @@ button{border:0;cursor:pointer;background:none;padding:0}
 svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
 #app{
-  height:100%;display:flex;flex-direction:column;position:relative;
+  #app{height:100%;display:flex;flex-direction:column;position:relative;
   padding-top:env(safe-area-inset-top);
   background:radial-gradient(52% 30% at 50% -6%,rgba(124,140,255,.09),transparent 70%),var(--bg);
+  touch-action:none}
 }
 
 /* ── Top bar ─────────────────────────── */
-.topbar{height:60px;min-height:60px;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;position:relative;z-index:5}
+.topbar{height:60px;min-height:60px;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;position:relative;z-index:5;touch-action:none}
 .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;letter-spacing:.2px}
 .brand-logo{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;color:#dfe3ff;
   background:linear-gradient(135deg,rgba(124,140,255,.28),rgba(163,124,255,.16));
@@ -100,7 +101,7 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .file-card.image-card .file-name{display:none}
 
 /* ── Composer ────────────────────────── */
-.composer-wrap{position:fixed;left:0;right:0;bottom:0;z-index:10;padding:0 12px calc(10px + env(safe-area-inset-bottom) + var(--kb,0px));background:linear-gradient(transparent,rgba(9,10,12,.9) 26%,#090a0c);pointer-events:none}
+.composer-wrap{position:fixed;left:0;right:0;bottom:0;z-index:10;padding:0 12px calc(10px + env(safe-area-inset-bottom) + var(--kb,0px));background:linear-gradient(transparent,rgba(9,10,12,.9) 26%,#090a0c);pointer-events:none;touch-action:none}
 .composer,.attachments{pointer-events:auto;max-width:720px;margin:0 auto}
 .composer{background:rgba(22,24,30,.97);border:1px solid var(--border-strong);border-radius:24px;padding:8px;box-shadow:0 8px 32px rgba(0,0,0,.4);transition:border-color .2s,box-shadow .2s}
 .composer:focus-within{border-color:rgba(124,140,255,.5);box-shadow:0 8px 32px rgba(0,0,0,.4),0 0 0 3px rgba(124,140,255,.08)}

@@ -525,10 +525,16 @@ function syncKeyboard(){
 }
 window.visualViewport&&window.visualViewport.addEventListener("resize",syncKeyboard);
 window.addEventListener("resize",syncKeyboard);
-// Block the rubber-band drag of the whole document: with body{position:fixed}
-// Android WebView can still pan the visual viewport on touchmove. preventDefault
-// on non-scrollable areas stops the page itself from being dragged around.
+// Lock the page pan dead. The browser's native scrolling is allowed ONLY when the
+// touch started inside an element that can actually scroll right now (chat feed,
+// sheets, code blocks, an overflowing textarea). Everything else — especially
+// the composer and its textarea — stays glued in place.
+const SCROLLABLE=".chat,.sheet,#recent,textarea,pre";
 document.addEventListener("touchmove",e=>{
-  if(e.target.closest&&e.target.closest(".chat,.sheet,#recent,textarea,.tool-preview pre,.reasoning-block pre,.code-block"))return;
+  let el=e.target;
+  while(el&&el!==document.body){
+    if(el.matches&&el.matches(SCROLLABLE)&&el.scrollHeight>el.clientHeight+4)return;
+    el=el.parentElement;
+  }
   e.preventDefault();
 },{passive:false});

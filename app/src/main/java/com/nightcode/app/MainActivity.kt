@@ -80,6 +80,13 @@ class MainActivity : ComponentActivity() {
                     return true
                 }
             }
+
+            // The page handles its own scrolling (body is position:fixed); any native
+            // pan gesture here would drag the whole layout, so swallow it.
+            setOnTouchListener { v, _ ->
+                v.performClick()
+                false
+            }
         }
 
         setContentView(webView)
