@@ -139,6 +139,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun pushSysInsets() {
+        Log.d("NightCodeInsets", "status=$sysStatus nav=$sysNav ime=$sysIme")
         webView.evaluateJavascript(
             "document.documentElement.style.setProperty('--sys-status','${sysStatus}px');" +
                 "document.documentElement.style.setProperty('--sys-nav','${sysNav}px');" +
