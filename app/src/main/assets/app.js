@@ -306,8 +306,23 @@ async function send(){
     for(let turn=0;turn<8;turn++){
       const body={model:state.selected,max_tokens:Number(state.settings.output)||6000,system,messages};
       if(proj)body.tools=TOOLS;
-      const r=await fetch(state.base.replace(/\/$/,"")+"/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},body:JSON.stringify(body)});
-      const txt=await r.text();if(!r.ok)throw Error(txt.slice(0,1000));
+      const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
+      let r;
+      try{
+        r=await fetch(reqUrl,{method:"POST",headers:{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},body:JSON.stringify(body)});
+      }catch(netErr){
+        // Network-level failure: DNS, TLS, connection refused, CORS. No HTTP status exists.
+        console.error("[NightCode] network failure",{url:reqUrl,model:state.selected,name:netErr&&netErr.name,message:netErr&&netErr.message});
+        throw Error("Network: "+(netErr&&netErr.message||netErr));
+      }
+      const txt=await r.text();
+      console.log("[NightCode] /v1/messages response",{
+        url:reqUrl,model:state.selected,modelInBody:body.model,
+        status:r.status,statusText:r.statusText,
+        contentType:r.headers.get("content-type"),
+        bodyLength:txt.length,bodyPreview:txt.slice(0,2000)
+      });
+      if(!r.ok)throw Error(txt.slice(0,1000));
       const data=JSON.parse(txt);
       const content=data.content||[];
       const toolUses=proj?content.filter(x=>x.type==="tool_use"):[];
@@ -335,7 +350,11 @@ async function send(){
     const last=state.messages[state.messages.length-1];
     last.reasoning=Date.now()-started;if(toolCalls.length)last.tools=toolCalls;
     save();render();
-  }catch(e){removeTyping();addMessage("assistant","Error: "+(e.message||e))}
+  }catch(e){
+    removeTyping();
+    console.error("[NightCode] send failed",{name:e&&e.name,message:e&&e.message,stack:e&&e.stack});
+    addMessage("assistant","Error: "+(e.message||e));
+  }
   finally{$("sendBtn").disabled=false}
 }
 function compactIfNeeded(){
