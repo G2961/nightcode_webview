@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#090a0c">
+<title>NightCode</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <button class="icon-btn" id="menuBtn" aria-label="Menu">☰</button>
+    <div class="brand">NightCode <span>Pro</span></div>
+    <button class="icon-btn" id="moreBtn" aria-label="Settings">⋮</button>
+  </header>
+
+  <main id="chat" class="chat">
+    <section id="welcome" class="welcome">
+      <div class="star">✳</div>
+      <h1>Hello, night owl</h1>
+      <p>Your local AI coding workspace</p>
+      <button class="quick" id="newChat">
+        <b>＋ New chat</b><small>Start a fresh conversation</small>
+      </button>
+      <button class="quick">
+        <b>▣ Open project</b><small>Continue coding</small>
+      </button>
+    </section>
+  </main>
+
+  <aside id="drawer" class="drawer">
+    <div class="drawer-head"><b>NightCode</b><button class="icon-btn" id="closeDrawer">×</button></div>
+    <button class="primary" id="drawerNew">＋ New chat</button>
+    <div class="muted-label">Recent chats</div>
+    <div id="recent"></div>
+  </aside>
+  <div id="scrim" class="scrim"></div>
+
+  <div id="addSheet" class="sheet hidden">
+    <div class="sheet-title">Add to chat</div>
+    <div class="add-grid">
+      <button onclick="openFiles()">📷<small>Camera</small></button>
+      <button onclick="openFiles()">▣<small>Photos</small></button>
+      <button onclick="openFiles()">📄<small>Files</small></button>
+    </div>
+    <div class="sheet-row">Project folder</div>
+    <div class="sheet-row">Web search</div>
+    <div class="sheet-row">Add to project</div>
+    <div class="sheet-row">Tool access</div>
+  </div>
+
+  <div id="settingsSheet" class="sheet hidden">
+    <div class="sheet-title">Connection</div>
+    <label>Base URL<input id="baseUrl" placeholder="https://api.example.com"></label>
+    <label>API key<input id="apiKey" type="password" placeholder="API key"></label>
+    <button class="primary" id="saveSettings">Save & refresh models</button>
+    <button class="sheet-row link" id="contextBtn">Context & memory</button>
+    <div id="settingsError" class="error"></div>
+  </div>
+
+  <div id="modelSheet" class="sheet hidden">
+    <div class="sheet-title">Select model</div>
+    <div id="models"></div>
+    <button class="primary" id="refreshModels">Refresh models</button>
+  </div>
+
+  <div id="contextSheet" class="sheet hidden">
+    <div class="sheet-title">Context & memory</div>
+    <label>Input context tokens<input id="inputTokens" inputmode="numeric"></label>
+    <label>Max output tokens<input id="outputTokens" inputmode="numeric"></label>
+    <label class="switch-row">Auto compact <input id="autoCompact" type="checkbox"></label>
+    <label>Compact threshold %<input id="threshold" inputmode="numeric"></label>
+    <button class="primary" id="saveContext">Save</button>
+    <button class="secondary" id="compactNow">Compact context now</button>
+  </div>
+
+  <div class="composer-wrap">
+    <div id="attachments" class="attachments"></div>
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="Ask NightCode anything…"></textarea>
+      <div class="composer-bar">
+        <button class="icon-btn" id="addBtn">＋</button>
+        <button class="model-btn" id="modelBtn">Model</button>
+        <span></span>
+        <button class="send-btn" id="sendBtn">↑</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
