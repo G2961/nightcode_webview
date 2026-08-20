@@ -410,13 +410,14 @@ async function send(){
     messages.push({role:"user",content:buildUserContent(prompt,at)});
     const proj=hasProject();
     const system=(proj
-      ?"You are NightCode, a local AI coding agent. You work on the user's selected project through tools. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded."
-      :"You are NightCode, a helpful AI coding assistant. There is no project folder connected, so answer normally without assuming access to local files or tools.")
+      ?"You are NightCode, a local AI coding agent. You work on the user's selected project through tools. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded. Use web_search whenever fresh information would help (docs, versions, errors)."
+      :"You are NightCode, a helpful AI assistant. There is no project folder connected, so do not assume access to local files. You have the web_search tool — use it whenever the question benefits from current information (documentation, news, library APIs, recent releases) and cite source URLs in your answer.")
       +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
     let final="";const toolCalls=[];let allThinking="";
     for(let turn=0;turn<8;turn++){
       const body={model:state.selected,max_tokens:Number(state.settings.output)||6000,system,messages};
-      if(proj)body.tools=TOOLS;
+      // Web search works everywhere; file tools only with a connected project.
+      body.tools=proj?[...FILE_TOOLS,WEB_SEARCH_TOOL]:[WEB_SEARCH_TOOL];
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
       let r;
       r=await httpFetch("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify(body));
@@ -432,7 +433,7 @@ async function send(){
       const data=JSON.parse(txt);
       console.log("[NightCode] response content blocks "+JSON.stringify((data.content||[]).map(x=>({type:x.type,hasText:!!x.text,hasThinking:!!(x.thinking||x.reasoning_content)}))));
       const content=data.content||[];
-      const toolUses=proj?content.filter(x=>x.type==="tool_use"):[];
+      const toolUses=content.filter(x=>x.type==="tool_use");
       // Hidden reasoning arrives in different shapes depending on the backend:
       // Anthropic-style content blocks of type "thinking", or OpenAI-style
       // choices[0].message.reasoning_content. Collect it and wrap in <think> so
@@ -520,7 +521,7 @@ function buildUserContent(prompt,attachments){
 }
 
 /* ── Agent tool execution via Android FS bridge ── */
-const TOOLS=[
+const FILE_TOOLS=[
   {name:"list_files",description:"List files in the connected project folder.",input_schema:{type:"object",properties:{},required:[]}},
   {name:"read_file",description:"Read a text file from the project.",input_schema:{type:"object",properties:{path:{type:"string"}},required:["path"]}},
   {name:"search_files",description:"Search text inside project files. Use this before editing to find symbols or references.",input_schema:{type:"object",properties:{query:{type:"string"},path:{type:"string"}},required:["query"]}},
@@ -529,7 +530,44 @@ const TOOLS=[
   {name:"rename_file",description:"Rename or move a file within the project.",input_schema:{type:"object",properties:{from:{type:"string"},to:{type:"string"}},required:["from","to"]}},
   {name:"delete_file",description:"Delete a file from the project. Only use when the user explicitly asks for deletion.",input_schema:{type:"object",properties:{path:{type:"string"}},required:["path"]}}
 ];
+const WEB_SEARCH_TOOL={name:"web_search",description:"Search the web for current information: documentation, recent events, library APIs, error messages. Returns titles, snippets and URLs.",input_schema:{type:"object",properties:{query:{type:"string",description:"Search query"}},required:["query"]}};
+
+/* Web search via DuckDuckGo. httpFetch (native bridge) has no CORS limits, so
+   lite.duckduckgo.com can be fetched directly; the Instant Answers JSON API is
+   the fallback when the HTML layout is unavailable. */
+async function runWebSearch(query){
+  const q=String(query||"").trim();
+  if(!q)return {result:"EMPTY_QUERY",error:true};
+  const strip=s=>String(s).replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#x27;|&#39;/g,"'").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/\s+/g," ").trim();
+  try{
+    const r=await httpFetch("GET","https://lite.duckduckgo.com/lite/?q="+encodeURIComponent(q),{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Safari/537.3"});
+    if(!r.error&&r.status>=200&&r.status<300&&r.body){
+      const links=[...r.body.matchAll(/<a[^>]*class=["']result-link["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/g)];
+      const snippets=[...r.body.matchAll(/<td[^>]*class=["']result-snippet["'][^>]*>([\s\S]*?)<\/td>/g)];
+      const out=[];
+      for(let i=0;i<Math.min(links.length,8);i++){
+        out.push((i+1)+". "+strip(links[i][2])+"\n   URL: "+strip(links[i][1])+(snippets[i]?"\n   "+strip(snippets[i][1]):""));
+      }
+      if(out.length)return {result:out.join("\n\n").slice(0,6000),error:false};
+    }
+  }catch(e){}
+  try{
+    const r=await httpFetch("GET","https://api.duckduckgo.com/?q="+encodeURIComponent(q)+"&format=json&no_html=1&skip_disambig=1",{"User-Agent":"Mozilla/5.0"});
+    if(!r.error&&r.body){
+      const d=JSON.parse(r.body);
+      const parts=[];
+      if(d.Answer)parts.push("Answer: "+strip(d.Answer));
+      if(d.AbstractText)parts.push(d.AbstractText+(d.AbstractURL?"\nSource: "+d.AbstractURL:""));
+      for(const t of (d.RelatedTopics||[])){
+        if(t.Text&&parts.length<8)parts.push(t.Text+(t.FirstURL?"\nURL: "+t.FirstURL:""));
+      }
+      if(parts.length)return {result:parts.join("\n\n").slice(0,6000),error:false};
+    }
+  }catch(e){}
+  return {result:"SEARCH_FAILED: no results (network or parsing error)",error:true};
+}
 async function runTool(name,input){
+  if(name==="web_search")return runWebSearch(input.query);
   if(name==="list_files")return fsCall("fsList");
   if(name==="read_file")return fsCall("fsRead",input.path);
   if(name==="search_files")return fsCall("fsSearch",input.query);
@@ -609,6 +647,7 @@ function toolPreview(name,input,result){
   const out=String(result||"");
   if(name==="list_files")return '<div class="tree-title">PROJECT ROOT</div><div class="tree">'+esc(makeTree(out))+'</div>';
   if(name==="search_files")return '<div class="tree-title">MATCHES</div><div class="tree">'+esc(out.split("\n").slice(0,20).join("\n")||"No matches")+'</div>';
+  if(name==="web_search")return '<div class="tree-title">RESULTS</div><div class="tree">'+esc(out.split("\n\n").slice(0,8).join("\n\n")||"No results")+'</div>';
   // The file path is already in the card subtitle (.tool-activity-sub) — no badge.
   return '<pre>'+esc(out.slice(0,5000))+"</pre>";
 }
