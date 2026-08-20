@@ -215,18 +215,7 @@ function renderAttachments(){
     const thumb=a.kind==="image"&&a.dataUrl?`<img src="${a.dataUrl}">`:'<svg><use href="#i-file"/></svg>';
     return `<div class="attachment">${thumb}<span>${esc(a.name)}</span><button onclick="removeAttachment(${i})" aria-label="Remove"><svg><use href="#i-close"/></svg></button></div>`;
   }).join("");
-  syncChatInset();
 }
-function syncChatInset(){
-  // Keep the chat scrollable past the composer: measure its real height
-  // (it changes with keyboard, attachments and textarea growth).
-  const wrap=document.querySelector(".composer-wrap");
-  const chat=$("chat");
-  if(!wrap||!chat)return;
-  chat.style.paddingBottom=(wrap.offsetHeight+24)+"px";
-}
-new ResizeObserver(syncChatInset).observe(document.querySelector(".composer-wrap"));
-window.addEventListener("resize",syncChatInset);
 function removeAttachment(i){state.attachments.splice(i,1);renderAttachments()}
 function openFiles(){
   if(window.Android&&Android.openFilePicker)Android.openFilePicker();
@@ -526,14 +515,10 @@ $("input").addEventListener("input",resizeInput)
 $("input").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}})
 initProjectState();render();renderAttachments();resizeInput();updateModelBtn();renderRecent();
 
-/* ── Keyboard-aware layout ──────────── */
+/* ── Keyboard-aware scrolling ───────── */
+// The native WebView padding handles the layout resize; we only keep the chat
+// pinned to the latest message when the viewport shrinks (keyboard opening).
 function syncKeyboard(){
-  // interactive-widget=resizes-content + adjustResize resize the layout viewport,
-  // so the app naturally compresses. We only pin the composer above the keyboard
-  // and keep the chat pinned to the latest message.
-  const vv=window.visualViewport;
-  const kb=vv?Math.max(0,window.innerHeight-vv.height-vv.offsetTop):0;
-  document.documentElement.style.setProperty("--kb",kb+"px");
   const chat=$("chat");
   if(chat)chat.scrollTop=chat.scrollHeight;
 }
