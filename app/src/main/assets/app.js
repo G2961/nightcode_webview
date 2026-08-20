@@ -132,18 +132,23 @@ function messageHtml(m){
   if(!showBubble)return `<div class="message ${m.role}">${files}</div>`;
   const tools=(m.tools||[]).map(t=>`<div class="tool-activity"><div class="tool-activity-head"><div class="tool-activity-icon"${t.error?' style="color:#ff7279"':""}>${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolLabel(t.name))}</div><div class="tool-activity-sub">${esc(toolTarget(t.input)||"")}</div></div><div class="tool-activity-status ${t.error?"error":"done"}">${t.error?"<span>Failed</span>":"<svg><use href=\"#i-check\"/></svg>"}</div></div><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></div>`).join("");
   const time=m.ts?`<div class="msg-time">${new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div>`:"";
-  // Reasoning renders as its own tool-activity-style card ABOVE the bubble —
-  // same visual language as the agent's tool cards (icon, title, sub, chevron).
+  // Thinking arrives as its own field (collected from the API's thinking blocks) —
+  // rendered as an agent-style collapsible card ABOVE the bubble. Never merged
+  // into m.text, never regex-split. Legacy chats (saved before this field existed)
+  // still carry <think>…</think> inside m.text — fallback extracts it once.
   let reasoningHtml="";
   if(m.role==="assistant"){
-    const {thinking,rest}=extractReasoning(m.text);
-    const dur=m.reasoning?formatReasoningTime(m.reasoning):null;
+    let thinking=m.thinking;
+    if(!thinking){
+      const legacy=extractReasoning(m.text);
+      if(legacy.thinking)thinking=legacy.thinking;
+    }
     if(thinking){
+      const dur=m.reasoning?formatReasoningTime(m.reasoning):null;
       reasoningHtml=`<details class="tool-activity reasoning-card"><summary class="tool-activity-head"><div class="tool-activity-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4.5 4.5 0 0 0-4.5 4.5c0 .7.2 1.4.5 2A4 4 0 0 0 5 13.5 4 4 0 0 0 9 17.5h.5A3.5 3.5 0 0 0 12 20a3.5 3.5 0 0 0 2.5-2.5H15a4 4 0 0 0 4-4 4 4 0 0 0-3-3.8c.3-.6.5-1.3.5-2A4.5 4.5 0 0 0 12 3z"/></svg></div><div class="tool-activity-text"><div class="tool-activity-title">Thinking</div><div class="tool-activity-sub">Thought for ${dur||"a moment"}</div></div><div class="reasoning-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></summary><div class="tool-preview"><pre>${esc(thinking)}</pre></div></details>`;
-      m._cleanText=rest;
     }
   }
-  const bodyText=m.role==="assistant"?(m._cleanText!==undefined?m._cleanText:m.text):m.text;
+  const bodyText=m.text;
   const bubbleHtml=m.role==="assistant"?md(bodyText,{reasoningDurationMs:m.reasoning}):esc(m.text||"");
   if(m.role==="assistant"){
     console.log("[NightCode] rendered assistant msg html "+JSON.stringify({hasReasoningCard:reasoningHtml.length>0,reasoningHtmlPrefix:reasoningHtml.slice(0,120),bubbleHtml:bubbleHtml.slice(0,120),mText:m.text.slice(0,200)}));
@@ -384,7 +389,7 @@ async function send(){
       ?"You are NightCode, a local AI coding agent. You work on the user's selected project through tools. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded."
       :"You are NightCode, a helpful AI coding assistant. There is no project folder connected, so answer normally without assuming access to local files or tools.")
       +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
-    let final="";const toolCalls=[];
+    let final="";const toolCalls=[];let allThinking="";
     for(let turn=0;turn<8;turn++){
       const body={model:state.selected,max_tokens:Number(state.settings.output)||6000,system,messages};
       if(proj)body.tools=TOOLS;
@@ -421,9 +426,12 @@ async function send(){
       }
       const altMsg=data.choices&&data.choices[0]&&data.choices[0].message;
       if(!reasoning&&altMsg&&altMsg.reasoning_content)reasoning=altMsg.reasoning_content;
+      // Keep thinking and answer SEPARATE: no <think>-wrapping into one string.
+      // Re-merging and re-splitting breaks whenever the reasoning itself contains
+      // angle brackets or quotes — the reason thinking kept leaking into bubbles.
       const text=content.filter(x=>x.type==="text").map(x=>x.text).join("\n");
-      const withThink=reasoning&&text?`<think>${reasoning.trim()}</think>\n\n${text}`:text;
-      if(withThink)final+=(final?"\n\n":"")+withThink;
+      if(reasoning)allThinking+=(allThinking?"\n\n":"")+reasoning.trim();
+      if(text)final+=(final?"\n\n":"")+text;
       if(!toolUses.length)break;
       messages.push({role:"assistant",content});
       const results=[];
@@ -444,7 +452,9 @@ async function send(){
     removeTyping();
     addMessage("assistant",final.trim()||"(empty response)",[]);
     const last=state.messages[state.messages.length-1];
-    last.reasoning=Date.now()-started;if(toolCalls.length)last.tools=toolCalls;
+    last.reasoning=Date.now()-started;
+    if(allThinking.trim())last.thinking=allThinking.trim();
+    if(toolCalls.length)last.tools=toolCalls;
     save();render();
   }catch(e){
     removeTyping();
