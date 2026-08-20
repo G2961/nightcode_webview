@@ -140,7 +140,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun pushSysInsets() {
-        Log.d("NightCodeInsets", "top=$sysTop bottom=$sysBottom")
         webView.evaluateJavascript(
             "document.documentElement.style.setProperty('--sys-top','${sysTop}px');" +
                 "document.documentElement.style.setProperty('--sys-bottom','${sysBottom}px');",
