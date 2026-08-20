@@ -139,6 +139,12 @@ textarea::placeholder{color:var(--text-3)}
 #recent::-webkit-scrollbar{width:0}
 .recent-empty{display:flex;flex-direction:column;align-items:center;gap:9px;color:var(--text-3);font-size:11.5px;padding:28px 0}
 .recent-empty svg{width:22px;height:22px;opacity:.6}
+.recent-chat{display:flex;align-items:center;gap:10px;width:100%;padding:10px 8px;border-radius:12px;text-align:left;color:var(--text-2);transition:background .15s}
+.recent-chat:active{background:var(--surface-2)}
+.chat-dot{width:7px;height:7px;min-width:7px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-2))}
+.recent-chat-main{display:flex;flex-direction:column;min-width:0;flex:1}
+.recent-chat-title{font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent-chat-time{font-size:10px;color:var(--text-3);margin-top:2px}
 .drawer-foot{color:var(--text-3);font-size:10px;text-align:center;padding:10px 0 4px;border-top:1px solid var(--border)}
 .scrim{position:fixed;z-index:19;inset:0;background:rgba(4,5,8,.55);opacity:0;pointer-events:none;transition:opacity .25s}
 .scrim.open{opacity:1;pointer-events:auto}

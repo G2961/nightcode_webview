@@ -202,13 +202,56 @@ function initProjectState(){
     state.projectName=localStorage.getItem("projectName")||"";
   }
 }
-function renderRecent(){
-  $("recent").innerHTML='<div class="recent-empty"><svg><use href="#i-chat"/></svg>No saved chats yet</div>';
+/* ── Recent chats: persisted per session ── */
+function getChats(){try{return JSON.parse(localStorage.getItem("chats")||"[]")}catch(e){return[]}}
+function setChats(chats){
+  try{localStorage.setItem("chats",JSON.stringify(chats))}
+  catch(e){
+    // Quota: drop oldest chats until it fits (attachments are already stripped).
+    while(chats.length>1){chats.pop();try{localStorage.setItem("chats",JSON.stringify(chats));return}catch(_){}}
+  }
 }
-// newChat lives with the sessions/projects code below.
+function saveCurrentChat(){
+  if(!state.messages.length)return;
+  const chats=getChats();
+  const sid=currentSessionId();
+  const firstUser=(state.messages.find(m=>m.role==="user")||{}).text||"Chat";
+  const record={
+    id:sid,
+    title:String(firstUser).replace(/[\n\r]+/g," ").slice(0,48),
+    updatedAt:Date.now(),
+    summary:state.summary,
+    // Strip base64/dataUrl payloads — only names/kinds survive in the list.
+    messages:state.messages.map(m=>({...m,attachments:(m.attachments||[]).map(a=>({name:a.name,kind:a.kind}))}))
+  };
+  const idx=chats.findIndex(c=>c.id===sid);
+  if(idx>=0)chats[idx]=record;else chats.unshift(record);
+  setChats(chats);
+}
+function formatChatTime(ts){
+  const d=new Date(ts),now=new Date();
+  if(d.toDateString()===now.toDateString())return d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+  return d.toLocaleDateString([],{day:"numeric",month:"short"});
+}
+function loadChat(id){
+  const c=getChats().find(x=>x.id===id);if(!c)return;
+  state.messages=c.messages||[];state.summary=c.summary||"";state.attachments=[];
+  localStorage.setItem("currentSession",id);
+  save();render();renderAttachments();
+  $("closeDrawer").click();
+}
+function renderRecent(){
+  const box=$("recent");if(!box)return;
+  const chats=getChats().sort((a,b)=>b.updatedAt-a.updatedAt);
+  if(!chats.length){
+    box.innerHTML='<div class="recent-empty"><svg><use href="#i-chat"/></svg>No saved chats yet</div>';
+    return;
+  }
+  box.innerHTML=chats.map(c=>`<button class="recent-chat" onclick="loadChat('${c.id}')"><span class="chat-dot"></span><span class="recent-chat-main"><span class="recent-chat-title">${esc(c.title)}</span><span class="recent-chat-time">${formatChatTime(c.updatedAt)}</span></span></button>`).join("");
+}
 function addMessage(role,text,attachments=[]){
   state.messages.push({id:crypto.randomUUID?crypto.randomUUID():String(Date.now()),role,text,attachments,ts:Date.now()});
-  save();render();
+  save();saveCurrentChat();render();
 }
 function renderAttachments(){
   $("attachments").innerHTML=state.attachments.map((a,i)=>{
@@ -428,7 +471,8 @@ function currentSessionId(){
   return id;
 }
 function newChat(){
-  state.messages=[];state.summary="";state.attachments=[];save();render();renderAttachments();
+  saveCurrentChat();
+  state.messages=[];state.summary="";state.attachments=[];save();render();renderAttachments();renderRecent();
   localStorage.removeItem("currentSession");
   currentSessionId();
 }
@@ -505,7 +549,7 @@ function showToolActivity(name,input){
   }};
 }
 
-$("menuBtn").onclick=()=>{$("drawer").classList.add("open");$("scrim").classList.add("open")}
+$("menuBtn").onclick=()=>{renderRecent();$("drawer").classList.add("open");$("scrim").classList.add("open")}
 $("closeDrawer").onclick=()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")}
 $("scrim").onclick=()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")}
 $("drawerNew").onclick=()=>{newChat();$("closeDrawer").click()}
