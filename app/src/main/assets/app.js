@@ -8,7 +8,10 @@ const state={
   summary:localStorage.getItem("summary")||"",
   settings:JSON.parse(localStorage.getItem("settings")||'{"input":128000,"output":6000,"auto":true,"threshold":80}'),
   attachments:[],
-  projectName:""
+  projectName:"",
+  wsEnabled:localStorage.getItem("wsEnabled")==="1",
+  sessions:JSON.parse(localStorage.getItem("sessions")||"[]"),
+  projects:JSON.parse(localStorage.getItem("projects")||"[]")
 };
 
 function save(){
@@ -33,7 +36,19 @@ function save(){
   localStorage.setItem("key",state.key);
   localStorage.setItem("summary",state.summary);
   localStorage.setItem("settings",JSON.stringify(state.settings));
+  localStorage.setItem("wsEnabled",state.wsEnabled?"1":"0");
+  localStorage.setItem("sessions",JSON.stringify(state.sessions));
+  localStorage.setItem("projects",JSON.stringify(state.projects));
 }
+
+/* ── System banner (non-chat status messages) ── */
+function showBanner(text){
+  hideBanner();
+  const chat=$("chat");
+  chat.insertAdjacentHTML("beforeend",`<div class="sys-banner" id="sysBanner"><svg><use href="#i-check"/></svg><span>${esc(text)}</span></div>`);
+  chat.scrollTop=chat.scrollHeight;
+}
+function hideBanner(){const b=$("sysBanner");if(b)b.remove()}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function md(s,opts={}){
   const blocks=[];
@@ -143,11 +158,30 @@ async function openProject(){
 }
 window.__onProjectPicked=function(name){
   if(name){
-    state.projectName=name;localStorage.setItem("projectName",name);
-    addMessage("assistant",`Connected to project **${name}**. I can now read, search and edit files in it.`);
+    state.projectName=name;
+    showBanner("Connected to project: "+name);
+  }else{
+    // User cancelled the picker: keep previous state, no fake "connected" notice.
   }
   render();
 };
+window.__onWorkspacePicked=function(name){
+  if(name){
+    state.wsEnabled=true;
+    showBanner("Workspace: "+name);
+  }
+  updateWorkspaceUI();
+  save();
+};
+function updateWorkspaceUI(){
+  const st=$("workspaceStatus");if(!st)return;
+  const has=window.Android&&Android.hasWorkspace&&Android.hasWorkspace();
+  st.innerHTML=has?"📁 "+esc(Android.getWorkspaceName()):"Not set";
+  st.classList.toggle("on",!!has);
+  $("wsEnabled").checked=state.wsEnabled;
+  $("wsPick").style.display=state.wsEnabled?"":"none";
+  $("wsClear").style.display=has?"":"none";
+}
 window.__onFilesPicked=function(files){
   if(!files||!files.length)return;
   for(const f of files){
@@ -171,9 +205,7 @@ function initProjectState(){
 function renderRecent(){
   $("recent").innerHTML='<div class="recent-empty"><svg><use href="#i-chat"/></svg>No saved chats yet</div>';
 }
-function newChat(){
-  state.messages=[];state.summary="";state.attachments=[];save();render();renderAttachments();
-}
+// newChat lives with the sessions/projects code below.
 function addMessage(role,text,attachments=[]){
   state.messages.push({id:crypto.randomUUID?crypto.randomUUID():String(Date.now()),role,text,attachments,ts:Date.now()});
   save();render();
@@ -183,7 +215,18 @@ function renderAttachments(){
     const thumb=a.kind==="image"&&a.dataUrl?`<img src="${a.dataUrl}">`:'<svg><use href="#i-file"/></svg>';
     return `<div class="attachment">${thumb}<span>${esc(a.name)}</span><button onclick="removeAttachment(${i})" aria-label="Remove"><svg><use href="#i-close"/></svg></button></div>`;
   }).join("");
+  syncChatInset();
 }
+function syncChatInset(){
+  // Keep the chat scrollable past the composer: measure its real height
+  // (it changes with keyboard, attachments and textarea growth).
+  const wrap=document.querySelector(".composer-wrap");
+  const chat=$("chat");
+  if(!wrap||!chat)return;
+  chat.style.paddingBottom=(wrap.offsetHeight+24)+"px";
+}
+new ResizeObserver(syncChatInset).observe(document.querySelector(".composer-wrap"));
+window.addEventListener("resize",syncChatInset);
 function removeAttachment(i){state.attachments.splice(i,1);renderAttachments()}
 function openFiles(){
   if(window.Android&&Android.openFilePicker)Android.openFilePicker();
@@ -368,6 +411,31 @@ function hasProject(){
   return !!(window.Android&&Android.hasProject&&Android.hasProject());
 }
 
+/* ── Chat sessions & projects (grouping) ── */
+function currentSessionId(){
+  // Simple stable id: bump when a chat is cleared, reuse otherwise.
+  let id=localStorage.getItem("currentSession");
+  if(!id){id="s"+Date.now();localStorage.setItem("currentSession",id)}
+  return id;
+}
+function newChat(){
+  state.messages=[];state.summary="";state.attachments=[];save();render();renderAttachments();
+  localStorage.removeItem("currentSession");
+  currentSessionId();
+}
+function addToProject(){
+  if(!state.projects.length){
+    const name=prompt("Project name:");
+    if(!name)return;
+    state.projects.push({id:"p"+Date.now(),name,sessionIds:[]});
+  }
+  const p=state.projects[0];
+  const sid=currentSessionId();
+  if(!p.sessionIds.includes(sid))p.sessionIds.push(sid);
+  save();
+  showBanner("Chat added to project: "+p.name);
+}
+
 function resizeInput(){$("input").style.height="auto";$("input").style.height=Math.min($("input").scrollHeight,150)+"px"}
 
 /* ── Tool activity cards ────────────── */
@@ -421,11 +489,14 @@ $("drawerNew").onclick=()=>{newChat();$("closeDrawer").click()}
 $("addBtn").onclick=()=>openSheet("addSheet")
 $("rowProjectFolder").onclick=()=>{closeSheets();openProject()}
 $("rowWebSearch").onclick=()=>{closeSheets();$("input").focus()}
-$("rowAddToProject").onclick=()=>{closeSheets();openProject()}
+$("rowAddToProject").onclick=()=>{closeSheets();addToProject()}
 $("rowToolAccess").onclick=()=>{closeSheets();openSheet("contextSheet")}
 document.addEventListener("click",e=>{const card=e.target.closest("#openProjectCard");if(card)openProject()});
 $("modelBtn").onclick=()=>{openSheet("modelSheet");renderModels()}
-$("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key}
+$("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;updateWorkspaceUI()}
+$("wsEnabled").onchange=e=>{state.wsEnabled=e.target.checked;save();updateWorkspaceUI()}
+$("wsPick").onclick=()=>{if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();else alert("Available in the Android app.")}
+$("wsClear").onclick=()=>{if(window.Android&&Android.clearWorkspace){Android.clearWorkspace()}state.wsEnabled=false;save();updateWorkspaceUI()}
 $("saveSettings").onclick=async()=>{
   state.base=$("baseUrl").value.trim();state.key=$("apiKey").value.trim();save();
   const btn=$("saveSettings");btn.disabled=true;const label=btn.textContent;btn.textContent="Saving…";

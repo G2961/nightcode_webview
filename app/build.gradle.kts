@@ -11,8 +11,17 @@ android {
         applicationId = "com.nightcode.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("nightcode.jks")
+            storePassword = "nightcode123"
+            keyAlias = "nightcode"
+            keyPassword = "nightcode123"
+        }
     }
 
     compileOptions {
@@ -26,6 +35,16 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
+        release {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+        }
     }
 }
 

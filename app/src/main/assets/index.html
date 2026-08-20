@@ -83,6 +83,12 @@
     <label>Base URL<input id="baseUrl" placeholder="https://api.example.com"></label>
     <label>API key<input id="apiKey" type="password" placeholder="API key"></label>
     <button class="primary" id="saveSettings">Save &amp; refresh models</button>
+    <div class="muted-label">Workspace</div>
+    <div id="workspaceStatus" class="workspace-status"></div>
+    <label class="switch-row">Use permanent workspace folder<input id="wsEnabled" type="checkbox"></label>
+    <button class="secondary" id="wsPick">Choose workspace folder</button>
+    <button class="secondary" id="wsClear">Disconnect workspace</button>
+    <div class="muted-label">Advanced</div>
     <button class="sheet-row link" id="contextBtn"><span class="row-ico"><svg><use href="#i-sliders"/></svg></span>Context &amp; memory<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
     <div id="settingsError" class="error"></div>
   </div>

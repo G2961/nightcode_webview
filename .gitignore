@@ -1,3 +1,7 @@
 # Local reference files
 xyeindex.html
 .ref-screenshots/
+
+# ADB debug artifacts
+screen.png
+ui_dump.xml

@@ -23,6 +23,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private var projectRoot: DocumentFile? = null
     private var projectName: String = ""
+    private var workspaceRoot: DocumentFile? = null
+    private var workspaceName: String = ""
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,8 +36,9 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightNavigationBars = false
         }
 
-        // Restore a previously granted project folder (persistable URI permission).
+        // Restore previously granted folders (persistable URI permissions).
         restoreProject()
+        restoreWorkspace()
 
         webView = WebView(this).apply {
             setBackgroundColor(0xFF090A0C.toInt())
@@ -101,6 +104,7 @@ class MainActivity : ComponentActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
             REQ_OPEN_TREE -> {
+                // Only treat as connected when the user actually picked a folder.
                 val uri = data?.data
                 if (resultCode == RESULT_OK && uri != null) {
                     try {
@@ -115,6 +119,22 @@ class MainActivity : ComponentActivity() {
                 }
                 val name = if (projectRoot != null) jsonString(projectName) else "null"
                 js("window.__onProjectPicked && window.__onProjectPicked($name)")
+            }
+            REQ_OPEN_WORKSPACE -> {
+                val uri = data?.data
+                if (resultCode == RESULT_OK && uri != null) {
+                    try {
+                        contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        )
+                    } catch (_: SecurityException) {}
+                    workspaceRoot = DocumentFile.fromTreeUri(this, uri)
+                    workspaceName = workspaceRoot?.name ?: "workspace"
+                    saveWorkspace(uri)
+                }
+                val name = if (workspaceRoot != null) jsonString(workspaceName) else "null"
+                js("window.__onWorkspacePicked && window.__onWorkspacePicked($name)")
             }
             REQ_OPEN_FILES -> {
                 val files = mutableListOf<String>()
@@ -157,18 +177,40 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restoreProject() {
+        restoreFolder("projectUri", "projectName") { root, name ->
+            projectRoot = root
+            projectName = name
+        }
+    }
+
+    private fun saveWorkspace(uri: Uri) {
+        getSharedPreferences("nightcode", MODE_PRIVATE)
+            .edit()
+            .putString("workspaceUri", uri.toString())
+            .putString("workspaceName", workspaceName)
+            .apply()
+    }
+
+    private fun restoreWorkspace() {
+        restoreFolder("workspaceUri", "workspaceName") { root, name ->
+            workspaceRoot = root
+            workspaceName = name
+        }
+    }
+
+    private inline fun restoreFolder(uriKey: String, nameKey: String, assign: (DocumentFile?, String) -> Unit) {
         val prefs = getSharedPreferences("nightcode", MODE_PRIVATE)
-        val saved = prefs.getString("projectUri", null) ?: return
+        val saved = prefs.getString(uriKey, null) ?: return
         try {
             val uri = Uri.parse(saved)
             val persisted = contentResolver.persistedUriPermissions.any {
                 it.uri == uri && it.isReadPermission
             }
             if (!persisted) return
-            projectRoot = DocumentFile.fromTreeUri(this, uri)
-            projectName = prefs.getString("projectName", "") ?: (projectRoot?.name ?: "project")
+            val root = DocumentFile.fromTreeUri(this, uri)
+            assign(root, prefs.getString(nameKey, "") ?: (root?.name ?: ""))
         } catch (_: Exception) {
-            projectRoot = null
+            assign(null, "")
         }
     }
 
@@ -204,10 +246,20 @@ class MainActivity : ComponentActivity() {
 
     private fun runFs(op: String, a: String, b: String, cb: String) {
         val root = projectRoot
-        if (root == null) {
+        if (root == null && workspaceRoot == null) {
             fsCallback(cb, "NO_PROJECT", true)
             return
         }
+        // Paths prefixed with "workspace:" address the permanent workspace folder;
+        // everything else goes to the current project folder.
+        val useWorkspace = a.startsWith("workspace:") || b.startsWith("workspace:")
+        val target = if (useWorkspace) workspaceRoot else (root ?: workspaceRoot)
+        if (target == null) {
+            fsCallback(cb, "NO_PROJECT", true)
+            return
+        }
+        val path = if (useWorkspace) a.removePrefix("workspace:") else a
+        val pathB = if (b.startsWith("workspace:")) b.removePrefix("workspace:") else b
         Thread {
             var result = ""
             var error = false
@@ -215,32 +267,32 @@ class MainActivity : ComponentActivity() {
                 when (op) {
                     "list" -> {
                         val names = mutableListOf<String>()
-                        walkFiles(root) { _, rel -> if (names.size < 500) names.add(rel) }
+                        walkFiles(target) { _, rel -> if (names.size < 500) names.add(rel) }
                         result = names.joinToString("\n").ifEmpty { "EMPTY_PROJECT" }
                     }
                     "read" -> {
-                        val f = root.findFileRecursive(a)
+                        val f = target.findFileRecursive(path)
                         if (f == null) throw Exception("FILE_NOT_FOUND")
                         val bytes = contentResolver.openInputStream(f.uri)?.use { it.readBytes() }
                         if (bytes == null) throw Exception("READ_FAILED")
                         result = String(bytes, Charsets.UTF_8)
                     }
                     "write" -> {
-                        val name = a.substringAfterLast('/')
-                        val dir = resolveDir(root, a.substringBeforeLast('/', ""), create = true)
+                        val name = path.substringAfterLast('/')
+                        val dir = resolveDir(target, path.substringBeforeLast('/', ""), create = true)
                         if (dir == null) throw Exception("WRITE_FAILED")
-                        val target = dir.findFile(name)
+                        val targetFile = dir.findFile(name)
                             ?: dir.createFile("application/octet-stream", name)
-                        if (target == null) throw Exception("WRITE_FAILED")
-                        val out = contentResolver.openOutputStream(target.uri, "wt")
+                        if (targetFile == null) throw Exception("WRITE_FAILED")
+                        val out = contentResolver.openOutputStream(targetFile.uri, "wt")
                         if (out == null) throw Exception("WRITE_FAILED")
                         out.use { it.write(Base64.decode(b, Base64.NO_WRAP)) }
-                        result = "WROTE $a"
+                        result = "WROTE $path"
                     }
                     "search" -> {
-                        val q = a.lowercase()
+                        val q = path.lowercase()
                         val hits = mutableListOf<String>()
-                        walkFiles(root) { file, rel ->
+                        walkFiles(target) { file, rel ->
                             if (hits.size < 100 && file.length() in 1..2_000_000) {
                                 try {
                                     val text = contentResolver.openInputStream(file.uri)
@@ -252,32 +304,31 @@ class MainActivity : ComponentActivity() {
                         result = hits.joinToString("\n").ifEmpty { "NO_MATCHES" }
                     }
                     "mkdir" -> {
-                        if (resolveDir(root, a, create = true) == null) throw Exception("MKDIR_FAILED")
-                        result = "CREATED_DIRECTORY $a"
+                        if (resolveDir(target, path, create = true) == null) throw Exception("MKDIR_FAILED")
+                        result = "CREATED_DIRECTORY $path"
                     }
                     "rename" -> {
-                        // SAF's renameTo() only changes the display name in place and is
-                        // unreliable across providers, so implement move as copy + delete.
-                        val src = root.findFileRecursive(a) ?: throw Exception("FILE_NOT_FOUND")
+                        // SAF rename is unreliable across providers: move = copy + delete.
+                        val src = target.findFileRecursive(path) ?: throw Exception("FILE_NOT_FOUND")
                         val bytes = contentResolver.openInputStream(src.uri)?.use { it.readBytes() }
                             ?: throw Exception("RENAME_FAILED")
-                        val dir = resolveDir(root, b.substringBeforeLast('/', ""), create = true)
+                        val dir = resolveDir(target, pathB.substringBeforeLast('/', ""), create = true)
                         if (dir == null) throw Exception("RENAME_FAILED")
-                        val targetName = b.substringAfterLast('/')
+                        val targetName = pathB.substringAfterLast('/')
                         val existing = dir.findFile(targetName)
                         if (existing != null && !existing.delete()) throw Exception("RENAME_FAILED")
-                        val target = dir.createFile("application/octet-stream", targetName)
+                        val dest = dir.createFile("application/octet-stream", targetName)
                             ?: throw Exception("RENAME_FAILED")
-                        val out = contentResolver.openOutputStream(target.uri, "wt")
-                        if (out == null) throw Exception("RENAME_FAILED")
+                        val out = contentResolver.openOutputStream(dest.uri, "wt")
+                            ?: throw Exception("RENAME_FAILED")
                         out.use { it.write(bytes) }
                         if (!src.delete()) throw Exception("RENAME_FAILED")
-                        result = "RENAMED $a -> $b"
+                        result = "RENAMED $path -> $pathB"
                     }
                     "delete" -> {
-                        val f = root.findFileRecursive(a) ?: throw Exception("FILE_NOT_FOUND")
+                        val f = target.findFileRecursive(path) ?: throw Exception("FILE_NOT_FOUND")
                         if (!f.delete()) throw Exception("DELETE_FAILED")
-                        result = "DELETED $a"
+                        result = "DELETED $path"
                     }
                     else -> throw Exception("UNKNOWN_OP")
                 }
@@ -341,10 +392,38 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun openWorkspacePicker() {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            startActivityForResult(intent, REQ_OPEN_WORKSPACE)
+        }
+
+        @JavascriptInterface
         fun hasProject(): Boolean = projectRoot != null
 
         @JavascriptInterface
         fun getProjectName(): String = if (projectRoot != null) projectName else ""
+
+        @JavascriptInterface
+        fun hasWorkspace(): Boolean = workspaceRoot != null
+
+        @JavascriptInterface
+        fun getWorkspaceName(): String = if (workspaceRoot != null) workspaceName else ""
+
+        @JavascriptInterface
+        fun clearWorkspace() {
+            workspaceRoot = null
+            workspaceName = ""
+            getSharedPreferences("nightcode", MODE_PRIVATE).edit()
+                .remove("workspaceUri").remove("workspaceName").apply()
+        }
+
+        @JavascriptInterface
+        fun clearProject() {
+            projectRoot = null
+            projectName = ""
+            getSharedPreferences("nightcode", MODE_PRIVATE).edit()
+                .remove("projectUri").remove("projectName").apply()
+        }
 
         @JavascriptInterface
         fun fsList(cb: String) { runFs("list", "", "", cb) }
@@ -377,6 +456,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val REQ_OPEN_TREE = 1002
+        private const val REQ_OPEN_WORKSPACE = 1003
         private const val REQ_OPEN_FILES = 1001
     }
 }

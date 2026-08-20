@@ -26,11 +26,19 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build APK
-        run: gradle assembleDebug
+        run: |
+          gradle assembleDebug assembleRelease
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: NightCode-debug
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NightCode-release
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
