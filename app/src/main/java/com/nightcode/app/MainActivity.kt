@@ -256,10 +256,22 @@ class MainActivity : ComponentActivity() {
                         result = "CREATED_DIRECTORY $a"
                     }
                     "rename" -> {
+                        // SAF's renameTo() only changes the display name in place and is
+                        // unreliable across providers, so implement move as copy + delete.
                         val src = root.findFileRecursive(a) ?: throw Exception("FILE_NOT_FOUND")
+                        val bytes = contentResolver.openInputStream(src.uri)?.use { it.readBytes() }
+                            ?: throw Exception("RENAME_FAILED")
                         val dir = resolveDir(root, b.substringBeforeLast('/', ""), create = true)
                         if (dir == null) throw Exception("RENAME_FAILED")
-                        if (!src.renameTo(dir, b.substringAfterLast('/'))) throw Exception("RENAME_FAILED")
+                        val targetName = b.substringAfterLast('/')
+                        val existing = dir.findFile(targetName)
+                        if (existing != null && !existing.delete()) throw Exception("RENAME_FAILED")
+                        val target = dir.createFile("application/octet-stream", targetName)
+                            ?: throw Exception("RENAME_FAILED")
+                        val out = contentResolver.openOutputStream(target.uri, "wt")
+                        if (out == null) throw Exception("RENAME_FAILED")
+                        out.use { it.write(bytes) }
+                        if (!src.delete()) throw Exception("RENAME_FAILED")
                         result = "RENAMED $a -> $b"
                     }
                     "delete" -> {
