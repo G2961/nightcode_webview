@@ -541,6 +541,7 @@ async function runWebSearch(query){
   const strip=s=>String(s).replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#x27;|&#39;/g,"'").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/\s+/g," ").trim();
   try{
     const r=await httpFetch("GET","https://lite.duckduckgo.com/lite/?q="+encodeURIComponent(q),{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Safari/537.3"});
+    console.log("[NightCode] DDG lite "+JSON.stringify({status:r.status,error:r.error,bodyLength:(r.body||"").length,bodyStart:(r.body||"").slice(0,600)}));
     if(!r.error&&r.status>=200&&r.status<300&&r.body){
       const links=[...r.body.matchAll(/<a[^>]*class=["']result-link["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/g)];
       const snippets=[...r.body.matchAll(/<td[^>]*class=["']result-snippet["'][^>]*>([\s\S]*?)<\/td>/g)];
@@ -553,6 +554,7 @@ async function runWebSearch(query){
   }catch(e){}
   try{
     const r=await httpFetch("GET","https://api.duckduckgo.com/?q="+encodeURIComponent(q)+"&format=json&no_html=1&skip_disambig=1",{"User-Agent":"Mozilla/5.0"});
+    console.log("[NightCode] DDG ia "+JSON.stringify({status:r.status,error:r.error,bodyStart:(r.body||"").slice(0,400)}));
     if(!r.error&&r.body){
       const d=JSON.parse(r.body);
       const parts=[];
