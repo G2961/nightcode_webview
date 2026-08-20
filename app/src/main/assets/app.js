@@ -456,12 +456,26 @@ function toolIcon(name){
 function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web'}[name]||String(name||'').replace(/_/g,' '))}
 function toolTarget(input){return input?.path||input?.to||input?.query||input?.url||''}
 function makeTree(text){
-  const lines=String(text||"").split("\n").filter(Boolean).slice(0,80);
-  return lines.map((x,i)=>((i===lines.length-1?"└── ":"├── ")+x)).join("\n")||"No results.";
+  // Root-level view only: directories first, then files. No recursive branches.
+  const lines=String(text||"").split("\n").filter(Boolean);
+  const dirs=[];const files=[];
+  for(const line of lines){
+    const isDir=line.endsWith("/");
+    const clean=isDir?line.slice(0,-1):line;
+    if(clean.includes("/"))continue;  // nested — model still sees it, UI doesn't
+    (isDir?dirs:files).push(clean);
+  }
+  const out=[];
+  for(const d of dirs.slice(0,30))out.push("📁 "+d+"/");
+  for(const f of files.slice(0,30))out.push("📄 "+f);
+  if(!out.length)return "Empty folder";
+  if(dirs.length+files.length>out.length)out.push("… +"+(dirs.length+files.length-out.length)+" more");
+  return out.join("\n");
 }
 function toolPreview(name,input,result){
   const out=String(result||"");
-  if(name==="list_files"||name==="search_files")return '<div class="tree-title">'+(name==="list_files"?"PROJECT":"MATCHES")+'</div><div class="tree">'+esc(makeTree(out))+'</div>';
+  if(name==="list_files")return '<div class="tree-title">PROJECT ROOT</div><div class="tree">'+esc(makeTree(out))+'</div>';
+  if(name==="search_files")return '<div class="tree-title">MATCHES</div><div class="tree">'+esc(out.split("\n").slice(0,20).join("\n")||"No matches")+'</div>';
   if(input?.path||input?.url)return '<div class="tool-file-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#i-file"/></svg><span>'+esc(input.path||input.url)+"</span></div><pre>"+esc(out.slice(0,5000))+"</pre>";
   return '<pre>'+esc(out.slice(0,5000))+"</pre>";
 }

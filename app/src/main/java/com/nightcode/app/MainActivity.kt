@@ -364,8 +364,13 @@ class MainActivity : ComponentActivity() {
             val entries = try { dir.listFiles() } catch (_: Exception) { return }
             for (f in entries) {
                 val name = f.name ?: continue
-                if (f.isDirectory) rec(f, if (prefix.isEmpty()) name else "$prefix/$name", depth + 1)
-                else visit(f, if (prefix.isEmpty()) name else "$prefix/$name")
+                if (f.isDirectory) {
+                    val rel = if (prefix.isEmpty()) name else "$prefix/$name"
+                    visit(f, "$rel/")
+                    rec(f, rel, depth + 1)
+                } else {
+                    visit(f, if (prefix.isEmpty()) name else "$prefix/$name")
+                }
             }
         }
         rec(root, "", 0)
