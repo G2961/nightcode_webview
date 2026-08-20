@@ -28,6 +28,9 @@ class MainActivity : ComponentActivity() {
     private var workspaceRoot: DocumentFile? = null
     private var workspaceName: String = ""
 
+    @Volatile private var sysTop = 0
+    @Volatile private var sysBottom = 0
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,6 +77,12 @@ class MainActivity : ComponentActivity() {
                     val url = request.url.toString()
                     return !(url.startsWith("http://") || url.startsWith("https://"))
                 }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    // Insets may have arrived while about:blank was showing; re-apply
+                    // them now that the real page can receive the CSS variables.
+                    pushSysInsets()
+                }
             }
 
             webChromeClient = object : WebChromeClient() {
@@ -93,19 +102,27 @@ class MainActivity : ComponentActivity() {
 
         setContentView(webView)
 
-        // env(safe-area-inset-*) is always 0 inside an Android WebView, so the system
-        // bar insets must be applied natively. Padding the WebView itself shrinks the
-        // content area, which pushes the topbar below the status bar and pins the
-        // composer above both the navigation bar and the keyboard (adjustResize +
-        // ime() inset include the keyboard height). The WebView background fills
-        // the padded areas so the look stays seamless.
-        ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
+        // env(safe-area-inset-*) is always 0 inside an Android WebView, and Chromium
+        // does not reliably re-layout its viewport from native view padding either.
+        // So insets are forwarded into the page as CSS variables; the stylesheet
+        // positions .topbar and .composer-wrap from them. The listener re-fires on
+        // IME show/hide, which is what lifts the composer above the keyboard.
+        // Native setPadding is intentionally NOT used: applying both would double
+        // the offset wherever the native path does work.
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { _, insets ->
             val bars = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime()
+                WindowInsetsCompat.Type.displayCutout() or
+                    WindowInsetsCompat.Type.statusBars() or
+                    WindowInsetsCompat.Type.navigationBars() or
+                    WindowInsetsCompat.Type.ime()
             )
-            v.setPadding(0, bars.top, 0, bars.bottom)
+            sysTop = bars.top
+            sysBottom = bars.bottom
+            pushSysInsets()
             insets
         }
+        // Insets can arrive before the first layout pass dispatches them; force it.
+        ViewCompat.requestApplyInsets(webView)
         webView.loadUrl("file:///android_asset/index.html")
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -120,6 +137,14 @@ class MainActivity : ComponentActivity() {
         webView.stopLoading()
         webView.destroy()
         super.onDestroy()
+    }
+
+    private fun pushSysInsets() {
+        webView.evaluateJavascript(
+            "document.documentElement.style.setProperty('--sys-top','${sysTop}px');" +
+                "document.documentElement.style.setProperty('--sys-bottom','${sysBottom}px');",
+            null
+        )
     }
 
     @Deprecated("Deprecated in Java")
