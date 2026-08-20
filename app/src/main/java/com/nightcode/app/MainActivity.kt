@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.provider.DocumentsContract
 import android.util.Base64
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -60,7 +59,7 @@ class MainActivity : ComponentActivity() {
                 WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
             }
 
-            addJavascriptInterface(AndroidBridge(this@MainActivity), "Android")
+            addJavascriptInterface(AndroidBridge(), "Android")
 
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
@@ -128,12 +127,9 @@ class MainActivity : ComponentActivity() {
                     for (u in uris) {
                         try {
                             val name = queryDisplayName(u) ?: "file"
-                            val bytes = contentResolver.openInputStream(u)?.use { it.readBytes() }
-                                ?: continue
-                            files.add(
-                                "{\"name\":" + jsonString(name) + ",\"b64\":\"" +
-                                    Base64.encodeToString(bytes, Base64.NO_WRAP) + "\"}"
-                            )
+                            base64InputStream(u)?.let { b64 ->
+                                files.add("{\"name\":" + jsonString(name) + ",\"b64\":\"$b64\"}")
+                            }
                         } catch (_: Exception) {}
                     }
                 }
@@ -142,13 +138,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun base64InputStream(uri: Uri): String? = try {
+        contentResolver.openInputStream(uri)?.use { ins ->
+            Base64.encodeToString(ins.readBytes(), Base64.NO_WRAP)
+        }
+    } catch (_: Exception) { null }
+
     private fun js(code: String) {
         webView.post { webView.evaluateJavascript(code) {} }
     }
 
     private fun saveProject(uri: Uri) {
         getSharedPreferences("nightcode", MODE_PRIVATE)
-            .edit().putString("projectUri", uri.toString()).putString("projectName", projectName).apply()
+            .edit()
+            .putString("projectUri", uri.toString())
+            .putString("projectName", projectName)
+            .apply()
     }
 
     private fun restoreProject() {
@@ -156,7 +161,9 @@ class MainActivity : ComponentActivity() {
         val saved = prefs.getString("projectUri", null) ?: return
         try {
             val uri = Uri.parse(saved)
-            val persisted = contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
+            val persisted = contentResolver.persistedUriPermissions.any {
+                it.uri == uri && it.isReadPermission
+            }
             if (!persisted) return
             projectRoot = DocumentFile.fromTreeUri(this, uri)
             projectName = prefs.getString("projectName", "") ?: (projectRoot?.name ?: "project")
@@ -328,25 +335,25 @@ class MainActivity : ComponentActivity() {
         fun getProjectName(): String = if (projectRoot != null) projectName else ""
 
         @JavascriptInterface
-        fun fsList(cb: String) = runFs("list", "", "", cb)
+        fun fsList(cb: String) { runFs("list", "", "", cb) }
 
         @JavascriptInterface
-        fun fsRead(path: String, cb: String) = runFs("read", path, "", cb)
+        fun fsRead(path: String, cb: String) { runFs("read", path, "", cb) }
 
         @JavascriptInterface
-        fun fsWrite(path: String, contentB64: String, cb: String) = runFs("write", path, contentB64, cb)
+        fun fsWrite(path: String, contentB64: String, cb: String) { runFs("write", path, contentB64, cb) }
 
         @JavascriptInterface
-        fun fsSearch(query: String, cb: String) = runFs("search", query, "", cb)
+        fun fsSearch(query: String, cb: String) { runFs("search", query, "", cb) }
 
         @JavascriptInterface
-        fun fsMkdir(path: String, cb: String) = runFs("mkdir", path, "", cb)
+        fun fsMkdir(path: String, cb: String) { runFs("mkdir", path, "", cb) }
 
         @JavascriptInterface
-        fun fsRename(from: String, to: String, cb: String) = runFs("rename", from, to, cb)
+        fun fsRename(from: String, to: String, cb: String) { runFs("rename", from, to, cb) }
 
         @JavascriptInterface
-        fun fsDelete(path: String, cb: String) = runFs("delete", path, "", cb)
+        fun fsDelete(path: String, cb: String) { runFs("delete", path, "", cb) }
 
         @JavascriptInterface
         fun openUrl(url: String) {
