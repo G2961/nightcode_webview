@@ -475,6 +475,9 @@ class MainActivity : ComponentActivity() {
     }
 
     inner class AndroidBridge {
+        // cb id -> live connection, so a stream can be aborted from JS mid-flight.
+        private val activeStreams = java.util.concurrent.ConcurrentHashMap<String, HttpURLConnection>()
+
         @JavascriptInterface
         fun openFilePicker() {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -558,8 +561,10 @@ class MainActivity : ComponentActivity() {
                 var code = 0
                 var error = false
                 var errMsg = ""
+                var cancelled = false
                 try {
                     val conn = URL(url).openConnection() as HttpURLConnection
+                    activeStreams[cb] = conn
                     conn.requestMethod = method.uppercase()
                     conn.connectTimeout = 30000
                     conn.readTimeout = 600000
@@ -589,13 +594,23 @@ class MainActivity : ComponentActivity() {
                         errMsg = conn.errorStream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
                     }
                 } catch (e: Exception) {
-                    errMsg = e.message ?: e.toString()
-                    error = true
+                    cancelled = activeStreams[cb] == null
+                    errMsg = if (cancelled) "cancelled" else (e.message ?: e.toString())
+                    error = !cancelled
+                } finally {
+                    activeStreams.remove(cb)
                 }
-                js("window.__streamDone && window.__streamDone(${jsonString(cb)}, $code, ${jsonString(errMsg)}, $error)")
+                js("window.__streamDone && window.__streamDone(${jsonString(cb)}, $code, ${jsonString(errMsg)}, $error, $cancelled)")
                 endRequest()
             }.start()
         }
+
+        /** Cancel an in-flight httpStream by its callback id (aborts the socket read). */
+        @JavascriptInterface
+        fun httpStreamCancel(cb: String) {
+            activeStreams.remove(cb)?.disconnect()
+        }
+
 
         @JavascriptInterface
         fun openUrl(url: String) {

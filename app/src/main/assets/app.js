@@ -1,4 +1,5 @@
 const $=id=>document.getElementById(id);
+const REGEN=Symbol("regen");
 const state={
   // A fresh app launch always starts a NEW chat; the previous one is already
   // persisted in the Recent list. Restoring the old session here made the app
@@ -65,6 +66,18 @@ function showBanner(text){
 }
 function hideBanner(){const b=$("sysBanner");if(b)b.remove()}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function unesc(s){return String(s).replace(/&amp;|&lt;|&gt;|&quot;|&#39;/g,c=>({"&amp;":"&","&lt;":"<","&gt;":">","&quot;":'"',"&#39;":"'"}[c]))}
+async function copyToClipboard(text){
+  try{await navigator.clipboard.writeText(text);return true}catch(e){}
+  try{
+    const ta=document.createElement("textarea");
+    ta.value=text;ta.style.position="fixed";ta.style.opacity="0";
+    document.body.appendChild(ta);ta.focus();ta.select();
+    const ok=document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  }catch(e){return false}
+}
 function md(s,opts={}){
   const blocks=[];
   const placeholder=html=>{const i=blocks.length;blocks.push(html);return `\u0000${i}\u0000`};
@@ -80,7 +93,10 @@ function md(s,opts={}){
     t=t.replace(new RegExp(`</?${open}(\\s[^>]*)?>`,"gi"),"");
   }
   let x=esc(t);
-  x=x.replace(/```([\w+-]*)\n?([\s\S]*?)```/g,(_,lang,code)=>placeholder(`<pre class="code-block">${lang?`<div class="code-lang">${esc(lang)}</div>`:""}<code>${code.replace(/\n$/,"")}</code></pre>`));
+  x=x.replace(/```([\w+-]*)\n?([\s\S]*?)```/g,(_,lang,code)=>{
+    const clean=code.replace(/\n$/,"");
+    return placeholder(`<pre class="code-block">${lang?`<div class="code-lang">${esc(lang)}</div>`:""}<button class="code-copy-btn" data-code="${encodeURIComponent(unesc(clean))}" aria-label="Copy code"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg></button><code>${clean}</code></pre>`);
+  });
   x=x.replace(/`([^`\n]+)`/g,(_,code)=>placeholder(`<code class="inline-code">${code}</code>`));
   const lines=x.split("\n");let out=[],inUl=false,inOl=false;
   const closeLists=()=>{if(inUl){out.push("</ul>");inUl=false}if(inOl){out.push("</ol>");inOl=false}};
@@ -142,7 +158,7 @@ function welcomeHtml(){
     </button>
   </section>`;
 }
-function messageHtml(m){
+function messageHtml(m,idx){
   const files=(m.attachments||[]).map(a=>{
     if(a.kind==="image"&&a.dataUrl)return `<div class="file-card image-card"><img src="${a.dataUrl}"><span class="file-name">${esc(a.name)}</span></div>`;
     const meta=a.kind==="image"?"image":(a.mime||"file");
@@ -170,7 +186,10 @@ function messageHtml(m){
   }
   const bodyText=m.text;
   const bubbleHtml=m.role==="assistant"?md(bodyText,{reasoningDurationMs:m.reasoning}):esc(m.text||"");
-  return `<div class="message ${m.role}">${files}${tools}${reasoningHtml}<div class="bubble">${bubbleHtml}</div>${time}</div>`;
+  const retryBtn=m.role==="assistant"?`<button class="msg-act-btn" data-act="retry" aria-label="Retry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 1 3 6.7"/><path d="M3 21v-6h6"/></svg></button>`:"";
+  const editBtn=m.role==="user"?`<button class="msg-act-btn" data-act="edit" aria-label="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>`:"";
+  const actions=`<div class="msg-actions"><button class="msg-act-btn" data-act="copy" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg></button>${editBtn}${retryBtn}<button class="msg-act-btn danger" data-act="delete" aria-label="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button></div>`;
+  return `<div class="message ${m.role}" data-idx="${idx}">${files}${tools}${reasoningHtml}<div class="bubble">${bubbleHtml}</div>${time}${actions}</div>`;
 }
 function render(){
   const chat=$("chat");
@@ -239,14 +258,21 @@ window.__httpResult=function(cbId,status,body,error){
 };
 /* ── Streaming client (SSE via native bridge) ── */
 const streamCbs={};let streamCbId=0;
+let activeStreamCbId=null;
 window.__streamChunk=function(cbId,data){
   const cb=streamCbs[cbId];if(cb&&cb.onChunk)cb.onChunk(data);
 };
-window.__streamDone=function(cbId,status,errMsg,error){
+window.__streamDone=function(cbId,status,errMsg,error,cancelled){
   const cb=streamCbs[cbId];if(!cb)return;
   delete streamCbs[cbId];
-  cb.onDone({status,errMsg,error:!!error});
+  if(activeStreamCbId===cbId)activeStreamCbId=null;
+  cb.onDone({status,errMsg,error:!!error,cancelled:!!cancelled});
 };
+function cancelActiveStream(){
+  if(!activeStreamCbId)return;
+  if(window.Android&&Android.httpStreamCancel)Android.httpStreamCancel(activeStreamCbId);
+  activeStreamCbId=null;
+}
 function httpStream(method,url,headers={},body="",onChunk){
   return new Promise(resolve=>{
     if(!window.Android||!Android.httpStream){
@@ -261,9 +287,10 @@ function httpStream(method,url,headers={},body="",onChunk){
       return;
     }
     const cbId="st"+(++streamCbId);
+    activeStreamCbId=cbId;
     streamCbs[cbId]={onChunk,onDone:resolve};
     try{Android.httpStream(method,url,JSON.stringify(headers),body,cbId)}
-    catch(e){delete streamCbs[cbId];resolve({status:0,errMsg:String(e&&e.message||e),error:true})}
+    catch(e){delete streamCbs[cbId];activeStreamCbId=null;resolve({status:0,errMsg:String(e&&e.message||e),error:true})}
   });
 }
 /* Retries with exponential backoff. Network-level failures (DNS/socket — Android
@@ -277,6 +304,7 @@ async function withRetry(fn,attempts=5){
       const r=await fn();
       if(r&&r.error===false&&r.status>=200&&r.status<500)return r;
       lastErr=r;
+      if(r&&r.cancelled)return r;
     }catch(e){lastErr={status:0,errMsg:String(e&&e.message||e),error:true,body:String(e&&e.message||e)}}
     if(i<attempts-1){
       const isNet=lastErr&&(lastErr.error||lastErr.status===0||/resolve host|unreachable|reset|timed out|EOF/i.test(String(lastErr.errMsg||lastErr.body||"")));
@@ -413,19 +441,37 @@ function formatChatTime(ts){
 }
 function loadChat(id){
   const c=getChats().find(x=>x.id===id);if(!c)return;
-  state.messages=c.messages||[];state.summary=c.summary||"";state.attachments=[];
+  state.messages=c.messages||[];state.summary=c.summary||"";state.attachments=[];state.lastUsage=null;
   localStorage.setItem("currentSession",id);
-  save();render();renderAttachments();
+  save();render();renderAttachments();renderCtxRing();
   $("closeDrawer").click();
 }
 function renderRecent(){
   const box=$("recent");if(!box)return;
-  const chats=getChats().sort((a,b)=>b.updatedAt-a.updatedAt);
+  const q=($("chatSearch")&&$("chatSearch").value||"").trim().toLowerCase();
+  let chats=getChats().sort((a,b)=>b.updatedAt-a.updatedAt);
+  if(q)chats=chats.filter(c=>
+    (c.title||"").toLowerCase().includes(q)||
+    (c.messages||[]).some(m=>(m.text||"").toLowerCase().includes(q))
+  );
   if(!chats.length){
-    box.innerHTML='<div class="recent-empty"><svg><use href="#i-chat"/></svg>No saved chats yet</div>';
+    box.innerHTML=q
+      ?`<div class="recent-empty"><svg><use href="#i-chat"/></svg>No chats match "${esc(q)}"</div>`
+      :'<div class="recent-empty"><svg><use href="#i-chat"/></svg>No saved chats yet</div>';
     return;
   }
-  box.innerHTML=chats.map(c=>`<button class="recent-chat" onclick="loadChat('${c.id}')"><span class="chat-dot"></span><span class="recent-chat-main"><span class="recent-chat-title">${esc(c.title)}</span><span class="recent-chat-time">${formatChatTime(c.updatedAt)}</span></span></button>`).join("");
+  const now=Date.now(),oneDay=86400000;
+  const startOfToday=new Date();startOfToday.setHours(0,0,0,0);
+  const today=startOfToday.getTime(),yesterday=today-oneDay,week=today-6*oneDay;
+  const groups=[["Today",c=>c.updatedAt>=today],["Yesterday",c=>c.updatedAt>=yesterday&&c.updatedAt<today],["Previous 7 days",c=>c.updatedAt>=week&&c.updatedAt<yesterday],["Older",c=>c.updatedAt<week]];
+  let html="";
+  for(const [label,test] of groups){
+    const items=chats.filter(test);
+    if(!items.length)continue;
+    html+=`<div class="muted-label">${label}</div>`;
+    html+=items.map(c=>`<button class="recent-chat" onclick="loadChat('${c.id}')"><span class="chat-dot"></span><span class="recent-chat-main"><span class="recent-chat-title">${esc(c.title)}</span><span class="recent-chat-time">${formatChatTime(c.updatedAt)}</span></span></button>`).join("");
+  }
+  box.innerHTML=html;
 }
 function addMessage(role,text,attachments=[]){
   state.messages.push({id:crypto.randomUUID?crypto.randomUUID():String(Date.now()),role,text,attachments,ts:Date.now()});
@@ -439,6 +485,31 @@ function renderAttachments(){
   }).join("");
 }
 function removeAttachment(i){state.attachments.splice(i,1);renderAttachments()}
+function deleteMessage(idx){
+  if(idx<0||idx>=state.messages.length)return;
+  state.messages.splice(idx,1);
+  save();saveCurrentChat();render();
+}
+function editMessage(idx){
+  const m=state.messages[idx];
+  if(!m||m.role!=="user")return;
+  // Editing re-opens the prompt for revision: drop this turn and everything
+  // after it (the old assistant answer no longer matches), same as retry.
+  state.messages.splice(idx);
+  save();saveCurrentChat();render();
+  $("input").value=m.text||"";
+  resizeInput();
+  $("input").focus();
+}
+function retryMessage(idx){
+  const m=state.messages[idx];
+  if(!m||m.role!=="assistant")return;
+  // Drop this answer; the preceding user turn is now the last message, so
+  // send() generates from it without appending a new prompt.
+  state.messages.splice(idx,1);
+  save();saveCurrentChat();render();
+  send(REGEN);
+}
 function openFiles(){
   if(window.Android&&Android.openFilePicker)Android.openFilePicker();
   else alert("File picker is available in the Android app.");
@@ -494,7 +565,60 @@ function getCtxLimits(){
 function isModelOverridden(){
   return !!(state.modelContext&&state.selected&&state.modelContext[state.selected]);
 }
-function selectModel(id){state.selected=decodeURIComponent(id);save();updateModelBtn();closeSheets()}
+/* Latest usage numbers straight from the API (message_start/message_delta),
+   not an estimate — Anthropic reports real input/output/cache token counts. */
+function updateUsage(u,isDelta){
+  if(!state.lastUsage)state.lastUsage={};
+  const cur=state.lastUsage;
+  if(u.input_tokens!=null)cur.input=u.input_tokens;
+  if(u.output_tokens!=null)cur.output=u.output_tokens;
+  if(u.cache_read_input_tokens!=null)cur.cacheRead=u.cache_read_input_tokens;
+  if(u.cache_creation_input_tokens!=null)cur.cacheCreation=u.cache_creation_input_tokens;
+  cur.updatedAt=Date.now();
+  save();
+  renderCtxRing();
+}
+function renderCtxRing(){
+  const btn=$("ctxRingBtn"),fg=$("ctxRingFg"),label=$("ctxRingLabel");
+  if(!btn||!fg||!label)return;
+  const lim=getCtxLimits();
+  const limit=Number(lim.input)||128000;
+  const u=state.lastUsage||{};
+  const used=(Number(u.input)||0)+(Number(u.cacheRead)||0)+(Number(u.cacheCreation)||0)+(Number(u.output)||0);
+  const pct=Math.max(0,Math.min(100,Math.round((used/limit)*100)));
+  const C=81.68;
+  fg.style.strokeDashoffset=String(C-(C*pct/100));
+  label.textContent=pct+"%";
+  btn.classList.toggle("warn",pct>=75&&pct<92);
+  btn.classList.toggle("danger",pct>=92);
+}
+function renderUsagePanel(){
+  const ring=$("usageRingFg"),pctEl=$("usageRingPct"),ringWrap=ring&&ring.closest(".usage-ring-big");
+  const usedEl=$("usageUsed"),limitEl=$("usageLimit"),bd=$("usageBreakdown");
+  if(!ring||!usedEl||!limitEl||!bd)return;
+  const lim=getCtxLimits();
+  const limit=Number(lim.input)||128000;
+  const u=state.lastUsage||{};
+  const input=Number(u.input)||0,output=Number(u.output)||0;
+  const cacheRead=Number(u.cacheRead)||0,cacheCreation=Number(u.cacheCreation)||0;
+  const used=input+output+cacheRead+cacheCreation;
+  const pct=Math.max(0,Math.min(100,Math.round((used/limit)*100)));
+  const C=169.6;
+  ring.style.strokeDashoffset=String(C-(C*pct/100));
+  pctEl.textContent=pct+"%";
+  if(ringWrap){ringWrap.classList.toggle("warn",pct>=75&&pct<92);ringWrap.classList.toggle("danger",pct>=92)}
+  usedEl.textContent=fmtTokens(used);
+  limitEl.textContent=fmtTokens(limit);
+  const rows=[];
+  if(input)rows.push(["Last input",input]);
+  if(output)rows.push(["Last output",output]);
+  if(cacheRead)rows.push(["Cache read",cacheRead]);
+  if(cacheCreation)rows.push(["Cache write",cacheCreation]);
+  bd.innerHTML=rows.length
+    ?rows.map(([k,v])=>`<div class="usage-bd-row"><span>${k}</span><b>${fmtTokens(v)}</b></div>`).join("")
+    :'<div class="usage-bd-empty">No usage data yet — send a message</div>';
+}
+function selectModel(id){state.selected=decodeURIComponent(id);save();updateModelBtn();renderCtxRing();closeSheets()}
 async function fetchModels(closeOnSuccess=false){
   $("settingsError").textContent="";
   if(!state.base){$("settingsError").textContent="Base URL is empty.";return}
@@ -511,21 +635,23 @@ async function fetchModels(closeOnSuccess=false){
 }
 async function send(override){
   const input=$("input");
-  const prompt=(typeof override==="string"?override:input.value).trim();
+  const regen=override===REGEN;
+  const prompt=regen?"":(typeof override==="string"?override:input.value).trim();
   // Slash commands never reach the model: intercept before the settings guard
   // so /help etc. work even without a configured API.
-  if(prompt.startsWith("/")){
+  if(!regen&&prompt.startsWith("/")){
     input.value="";resizeInput();
     $("slashMenu").classList.remove("show");
     await handleSlash(prompt);
     return;
   }
-  if(!prompt&&!state.attachments.length)return;
+  if(!regen&&!prompt&&!state.attachments.length)return;
+  if(regen&&!state.messages.length)return;
   if(!state.base||!state.key||!state.selected){openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;return}
   const at=[...state.attachments];
   input.value="";resizeInput();state.attachments=[];renderAttachments();
-  addMessage("user",prompt,at);
-  $("sendBtn").disabled=true;
+  if(!regen)addMessage("user",prompt,at);
+  $("sendBtn").classList.add("stop");
   showTyping();
   const started=Date.now();
   try{
@@ -541,6 +667,7 @@ async function send(override){
       return s.trim();
     };
     // History: everything before the current turn, text-only (attachments were sent in their own turns).
+    const lastMsg=state.messages[state.messages.length-1];
     const history=state.messages.slice(0,-1)
       .map(m=>({role:m.role,content:strip(m.text)}))
       .filter(m=>m.content);
@@ -550,7 +677,7 @@ async function send(override){
       if(prev&&prev.role===m.role){prev.content+="\n\n"+m.content}  // merge adjacent same-role turns
       else messages.push(m);
     }
-    messages.push({role:"user",content:buildUserContent(prompt,at)});
+    messages.push({role:"user",content:regen?buildUserContent(lastMsg.text,lastMsg.attachments||[]):buildUserContent(prompt,at)});
     const proj=hasProject();
     const system=(proj
       ?"You are NightCode, a local AI coding agent. You work on the user's selected project through tools. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded. Use web_search whenever fresh information would help (docs, versions, errors)."
@@ -606,6 +733,10 @@ async function send(override){
         try{
           const ev=JSON.parse(chunk);
           const tt=document.getElementById("liveTitle");
+          if(ev.type==="message_start"){
+            const u=(ev.message||{}).usage;
+            if(u)updateUsage(u);
+          }
           if(ev.type==="content_block_start"){
             const b=ev.content_block||{};
             blocks[ev.index]={type:b.type,id:b.id,name:b.name,inputJson:""};
@@ -623,9 +754,19 @@ async function send(override){
             if(d.partial_json&&blocks[ev.index])blocks[ev.index].inputJson+=d.partial_json;
           }
           if(ev.type==="message_delta"&&ev.delta&&ev.delta.stop_reason)stopReason=ev.delta.stop_reason;
+          if(ev.type==="message_delta"&&ev.usage)updateUsage(ev.usage,true);
           if(ev.type==="error")stopReason="error:"+((ev.error||{}).message||"stream error");
         }catch(e){console.log("[NightCode] chunk handler error "+String(e&&e.message||e))}
       }));
+      if(r.cancelled){
+        hideLiveCard();
+        const partial=final.trim();
+        addMessage("assistant",partial||"⏹ Generation stopped.",[]);
+        const lm=state.messages[state.messages.length-1];
+        if(allThinking)lm.thinking=allThinking;
+        lm.reasoning=Date.now()-started;save();render();
+        return;
+      }
       if(r.error){
         const friendly=netErrMsg(r.errMsg||r.body);
         throw Error(friendly||("Network: "+String(r.errMsg||r.body).slice(0,1000)));
@@ -724,7 +865,7 @@ async function send(override){
       addMessage("assistant","Error: "+(e.message||e));
     }
   }
-  finally{$("sendBtn").disabled=false;hideLiveCardSafe()}
+  finally{$("sendBtn").classList.remove("stop");hideLiveCardSafe()}
 }
 let _hideLiveCardFn=null;
 function hideLiveCardSafe(){if(_hideLiveCardFn)_hideLiveCardFn()}
@@ -1475,7 +1616,7 @@ function currentSessionId(){
 }
 function newChat(){
   saveCurrentChat();
-  state.messages=[];state.summary="";state.attachments=[];save();render();renderAttachments();renderRecent();
+  state.messages=[];state.summary="";state.attachments=[];state.lastUsage=null;save();render();renderAttachments();renderRecent();renderCtxRing();
   localStorage.removeItem("currentSession");
   currentSessionId();
 }
@@ -1656,6 +1797,44 @@ async function verifyOllamaKey(){
   }
 }
 $("searchProviderSel").onchange=e=>{state.searchProvider=e.target.value;save();updateSearchUI()}
+$("chatSearch").addEventListener("input",renderRecent)
+$("chat").addEventListener("click",e=>{
+  const copyBtn=e.target.closest(".code-copy-btn");
+  if(copyBtn){
+    const code=decodeURIComponent(copyBtn.dataset.code||"");
+    copyToClipboard(code).then(ok=>{
+      copyBtn.classList.toggle("copied",ok);
+      setTimeout(()=>copyBtn.classList.remove("copied"),1400);
+    });
+    return;
+  }
+  const actBtn=e.target.closest(".msg-act-btn");
+  if(actBtn){
+    const msgEl=actBtn.closest(".message");
+    const idx=Number(msgEl&&msgEl.dataset.idx);
+    if(Number.isNaN(idx))return;
+    const act=actBtn.dataset.act;
+    if(act==="copy"){
+      const m=state.messages[idx];
+      copyToClipboard(m&&m.text||"").then(ok=>{
+        actBtn.classList.toggle("copied",ok);
+        setTimeout(()=>actBtn.classList.remove("copied"),1400);
+      });
+    }else if(act==="retry")retryMessage(idx);
+    else if(act==="edit")editMessage(idx);
+    else if(act==="delete")deleteMessage(idx);
+    return;
+  }
+  const bubble=e.target.closest(".bubble");
+  if(bubble){
+    const msgEl=bubble.closest(".message");
+    if(msgEl){
+      const wasOpen=msgEl.classList.contains("acted");
+      document.querySelectorAll(".message.acted").forEach(el=>el.classList.remove("acted"));
+      if(!wasOpen)msgEl.classList.add("acted");
+    }
+  }
+});
 $("ollamaKeyInput").addEventListener("input",e=>{
   state.ollamaKey=e.target.value.trim();save();
 });
@@ -1689,6 +1868,7 @@ $("contextBtn").onclick=()=>{
   $("inputTokens").value=lim.input;$("outputTokens").value=lim.output;
   $("autoCompact").checked=state.settings.auto;$("threshold").value=state.settings.threshold;
   $("perModelCtx").checked=isModelOverridden();
+  renderUsagePanel();
   const note=$("ctxModelNote");
   if(note){
     note.textContent=isModelOverridden()
@@ -1719,15 +1899,19 @@ $("saveContext").onclick=()=>{
   }
   state.settings.auto=$("autoCompact").checked;
   state.settings.threshold=Number($("threshold").value)||80;
-  save();closeSheets();
+  save();renderCtxRing();closeSheets();
 }
 $("compactNow").onclick=()=>compactNow(true)
-$("sendBtn").onclick=send
+$("ctxRingBtn").onclick=()=>$("contextBtn").onclick()
+$("sendBtn").onclick=()=>{
+  if($("sendBtn").classList.contains("stop")){cancelActiveStream();return}
+  send();
+}
 $("input").addEventListener("input",resizeInput)
 $("input").addEventListener("input",updateSlashMenu)
 $("input").addEventListener("keydown",e=>{if(e.key==="Escape"){$("slashMenu").classList.remove("show")}})
 $("input").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}})
-initProjectState();render();renderAttachments();resizeInput();updateModelBtn();renderRecent();loadExtensions();
+initProjectState();render();renderAttachments();resizeInput();updateModelBtn();renderCtxRing();renderRecent();loadExtensions();
 
 /* ── Keyboard-aware scrolling ───────── */
 // The native WebView padding handles the layout resize; we only keep the chat
