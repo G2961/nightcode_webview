@@ -1,6 +1,9 @@
 const $=id=>document.getElementById(id);
 const state={
-  messages:JSON.parse(localStorage.getItem("messages")||"[]"),
+  // A fresh app launch always starts a NEW chat; the previous one is already
+  // persisted in the Recent list. Restoring the old session here made the app
+  // reopen the last chat instead of a fresh one.
+  messages:[],
   models:JSON.parse(localStorage.getItem("models")||"[]"),
   selected:localStorage.getItem("model")||"",
   base:localStorage.getItem("base")||"",
@@ -820,12 +823,14 @@ $("searchOllamaChk").onchange=e=>{
   state.searchOllama=e.target.checked;save();updateSearchUI();
   if(state.searchOllama&&state.ollamaKey&&!state._ollamaVerified)verifyOllamaKey();
 };
-$("ollamaKeyInput").addEventListener("change",e=>{
+$("ollamaKeyInput").addEventListener("input",e=>{
   state.ollamaKey=e.target.value.trim();save();
   // Entering a key means the user wants Ollama search: enable the toggle too.
-  if(state.ollamaKey&&!state.searchOllama){state.searchOllama=true;save()}
-  updateSearchUI();
-  if(state.ollamaKey)verifyOllamaKey();
+  if(state.ollamaKey&&!state.searchOllama){state.searchOllama=true;save();$("searchOllamaChk").checked=true}
+});
+$("ollamaKeyInput").addEventListener("change",e=>{
+  // Verify on commit (blur/enter) — input handler above already saved the value.
+  if(state.ollamaKey)verifyOllamaKey();else{state.searchOllama=false;save();updateSearchUI()}
 });
 $("verifyOllamaBtn").onclick=verifyOllamaKey;
 $("wsEnabled").onchange=e=>{state.wsEnabled=e.target.checked;save();updateWorkspaceUI()}
