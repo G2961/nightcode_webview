@@ -554,15 +554,7 @@ async function ollamaApi(path,payload){
   return r;
 }
 /* Quick key check: a 1-result search. Called when the user saves the key. */
-async function verifyOllamaKey(){
-  const note=$("searchNote");
-  if(!state.ollamaKey){if(note)note.textContent="No key set — using free search";return}
-  if(note)note.textContent="Checking key…";
-  const r=await ollamaApi("web_search",{query:"test",max_results:1});
-  if(!r.error&&r.status>=200&&r.status<300){if(note)note.textContent="Key OK ✓"}
-  else if(r.status===401||r.status===403){if(note)note.textContent="Key invalid (401/403) — check ollama.com/settings/keys"}
-  else{if(note)note.textContent="Key check failed (status "+r.status+")"}
-}
+// verifyOllamaKey (UI version) lives with the settings handlers below.
 async function searchOllama(q){
   const r=await ollamaApi("web_search",{query:q,max_results:8});
   if(r.error||r.status<200||r.status>=300)return null;
@@ -671,7 +663,7 @@ async function runTool(name,input){
     // No Ollama key: fetch raw HTML natively and strip tags.
     const url=String(input.url||"");
     if(!/^https?:\/\//.test(url))return {result:"INVALID_URL (needs http/https)",error:true};
-    const r=await httpFetch("GET",url,{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Safari/537.3"});
+    const r=await httpFetch("GET",url,{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Gecko/537.36 Chrome/127.0.0.0 Mobile Safari/537.36","Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8","Accept-Language":"ru-RU,ru;q=0.9,en;q=0.8"});
     if(r.error||r.status<200||r.status>=300)return {result:"FETCH_FAILED: "+r.body.slice(0,200),error:true};
     const text=r.body
       .replace(/<script[\s\S]*?<\/script>/gi,"").replace(/<style[\s\S]*?<\/style>/gi,"")
@@ -797,10 +789,45 @@ function updateSearchUI(){
   $("ollamaKeyInput").value=state.ollamaKey;
   const keyOk=state.searchOllama&&state.ollamaKey;
   $("ollamaKeyInput").style.display=state.searchOllama?"":"none";
-  $("searchNote").textContent=keyOk?"On: Ollama search + web fetch tools":"Off: free search (Bing/Google News)";
+  const st=$("keyStatus");
+  if(!st)return;
+  st.className="key-status";
+  st.textContent=state.searchOllama?(state.ollamaKey?(state._ollamaVerified?"Ollama search ✓ active":"Key saved — press Check key"):"Enter your Ollama API key"):"Free search (Bing / Google News)";
+  if(keyOk&&state._ollamaVerified)st.classList.add("ok");
 }
-$("searchOllamaChk").onchange=e=>{state.searchOllama=e.target.checked;save();updateSearchUI()}
-$("ollamaKeyInput").addEventListener("change",e=>{state.ollamaKey=e.target.value.trim();save();verifyOllamaKey()})
+/* Quick key check: a 1-result search. Auto-runs on toggle/entry, manual button too. */
+async function verifyOllamaKey(){
+  const st=$("keyStatus");
+  if(!st)return;
+  if(!state.ollamaKey){st.className="key-status";st.textContent="Enter your Ollama API key";return}
+  st.className="key-status checking";st.textContent="Checking key…";
+  const btn=$("verifyOllamaBtn");if(btn)btn.disabled=true;
+  const r=await ollamaApi("web_search",{query:"test",max_results:1});
+  if(btn)btn.disabled=false;
+  state._ollamaVerified=false;
+  if(!r.error&&r.status>=200&&r.status<300){
+    state._ollamaVerified=true;
+    st.className="key-status ok";st.textContent="Ollama search ✓ active";
+  }else if(r.status===401||r.status===403){
+    st.className="key-status bad";st.textContent="Key invalid — get one at ollama.com/settings/keys";
+  }else if(r.error){
+    st.className="key-status bad";st.textContent="Network error: "+String(r.body||"").slice(0,80);
+  }else{
+    st.className="key-status bad";st.textContent="Key check failed (HTTP "+r.status+")";
+  }
+}
+$("searchOllamaChk").onchange=e=>{
+  state.searchOllama=e.target.checked;save();updateSearchUI();
+  if(state.searchOllama&&state.ollamaKey&&!state._ollamaVerified)verifyOllamaKey();
+};
+$("ollamaKeyInput").addEventListener("change",e=>{
+  state.ollamaKey=e.target.value.trim();save();
+  // Entering a key means the user wants Ollama search: enable the toggle too.
+  if(state.ollamaKey&&!state.searchOllama){state.searchOllama=true;save()}
+  updateSearchUI();
+  if(state.ollamaKey)verifyOllamaKey();
+});
+$("verifyOllamaBtn").onclick=verifyOllamaKey;
 $("wsEnabled").onchange=e=>{state.wsEnabled=e.target.checked;save();updateWorkspaceUI()}
 $("wsPick").onclick=()=>{if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();else alert("Available in the Android app.")}
 $("wsClear").onclick=()=>{if(window.Android&&Android.clearWorkspace){Android.clearWorkspace()}state.wsEnabled=false;save();updateWorkspaceUI()}

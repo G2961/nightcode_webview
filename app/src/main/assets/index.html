@@ -85,7 +85,8 @@
     <div class="muted-label">Web search</div>
     <label class="switch-row">Use Ollama search (API key)<input id="searchOllamaChk" type="checkbox"></label>
     <label>Ollama API key<input id="ollamaKeyInput" type="password" placeholder="ollama.com/settings/keys"></label>
-    <div class="context-note" id="searchNote">Off: free search (Bing/Google News)</div>
+    <button class="secondary" id="verifyOllamaBtn">Check key</button>
+    <div class="key-status" id="keyStatus">Free search (Bing / Google News)</div>
     <div class="muted-label">Workspace</div>
     <div id="workspaceStatus" class="workspace-status"></div>
     <label class="switch-row">Use permanent workspace folder<input id="wsEnabled" type="checkbox"></label>
