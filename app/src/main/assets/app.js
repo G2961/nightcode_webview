@@ -14,6 +14,7 @@ const state={
   projectName:"",
   wsEnabled:localStorage.getItem("wsEnabled")==="1",
   searchOllama:localStorage.getItem("searchOllama")==="1",
+  searchProvider:localStorage.getItem("searchProvider")||"auto",
   ollamaKey:localStorage.getItem("ollamaKey")||"",
   sessions:JSON.parse(localStorage.getItem("sessions")||"[]"),
   projects:JSON.parse(localStorage.getItem("projects")||"[]")
@@ -43,6 +44,7 @@ function save(){
   localStorage.setItem("settings",JSON.stringify(state.settings));
   localStorage.setItem("wsEnabled",state.wsEnabled?"1":"0");
   localStorage.setItem("searchOllama",state.searchOllama?"1":"0");
+  localStorage.setItem("searchProvider",state.searchProvider);
   localStorage.setItem("ollamaKey",state.ollamaKey);
   localStorage.setItem("sessions",JSON.stringify(state.sessions));
   localStorage.setItem("projects",JSON.stringify(state.projects));
@@ -137,7 +139,7 @@ function messageHtml(m){
   }).join("");
   const showBubble=m.text||m.role!=="user";
   if(!showBubble)return `<div class="message ${m.role}">${files}</div>`;
-  const tools=(m.tools||[]).map(t=>`<div class="tool-activity"><div class="tool-activity-head"><div class="tool-activity-icon"${t.error?' style="color:#ff7279"':""}>${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolLabel(t.name))}</div><div class="tool-activity-sub">${esc(toolTarget(t.input)||"")}</div></div><div class="tool-activity-status ${t.error?"error":"done"}">${t.error?"<span>Failed</span>":"<svg><use href=\"#i-check\"/></svg>"}</div></div><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></div>`).join("");
+  const tools=(m.tools||[]).map(t=>`<details class="tool-activity compact"><summary class="tool-activity-head"><div class="tool-activity-icon sm">${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolCompactLabel(t))}</div></div><div class="reasoning-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></summary><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></details>`).join("");
   const time=m.ts?`<div class="msg-time">${new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div>`:"";
   // Thinking arrives as its own field (collected from the API's thinking blocks) —
   // rendered as an agent-style collapsible card ABOVE the bubble. Never merged
@@ -424,7 +426,7 @@ async function send(){
     for(let turn=0;turn<8;turn++){
       const body={model:state.selected,max_tokens:Number(state.settings.output)||6000,system,messages};
       // Web tools always available; file tools only with a connected project.
-      const webTools=state.searchOllama&&state.ollamaKey?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
+      const webTools=(state.searchProvider!=="free"&&state.ollamaKey)?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
       body.tools=proj?[...FILE_TOOLS,...webTools]:webTools;
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
       let r;
@@ -624,10 +626,13 @@ async function searchBing(q){
 async function runWebSearch(query){
   const q=String(query||"").trim();
   if(!q)return {result:"EMPTY_QUERY",error:true};
-  // Preferred provider: Ollama (if key set) — real search index, quality results.
-  if(state.searchOllama&&state.ollamaKey){
+  // Provider routing: explicit choice wins, auto = Ollama first when key exists.
+  const prov=state.searchProvider||"auto";
+  if(prov!=="free"&&state.ollamaKey){
     const o=await searchOllama(q);
     if(o)return {result:o,error:false};
+    console.log("[NightCode] Ollama search empty, provider="+prov);
+    if(prov==="ollama")return {result:"SEARCH_FAILED: Ollama returned no results",error:true};
   }
   const news=isNewsQuery(q);
   try{
@@ -662,7 +667,7 @@ async function runWebSearch(query){
 async function runTool(name,input){
   if(name==="web_search")return runWebSearch(input.query);
   if(name==="web_fetch"){
-    if(state.searchOllama&&state.ollamaKey)return fetchOllama(String(input.url||"").replace(/^\/+/,""));
+    if(state.searchProvider!=="free"&&state.ollamaKey)return fetchOllama(String(input.url||"").replace(/^\/+/,""));
     // No Ollama key: fetch raw HTML natively and strip tags.
     const url=String(input.url||"");
     if(!/^https?:\/\//.test(url))return {result:"INVALID_URL (needs http/https)",error:true};
@@ -731,6 +736,26 @@ function toolIcon(name){
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.get_file_info)+'</svg>';
 }
 function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page'}[name]||String(name||'').replace(/_/g,' '))}
+/* Claude-style one-line labels: past tense + target, e.g. Searched "query" */
+function toolCompactLabel(t){
+  const target=toolTarget(t.input)||"";
+  const short=target.length>40?target.slice(0,37)+"…":target;
+  const map={
+    web_search:'Searched "'+short+'"',
+    web_fetch:'Read '+short,
+    read_file:'Read '+short,
+    write_file:'Edited '+short,
+    list_files:'Listed project files',
+    search_files:'Searched project for "'+short+'"',
+    create_directory:'Created '+short,
+    rename_file:'Renamed to '+short,
+    delete_file:'Deleted '+short,
+    get_file_info:'Inspected '+short
+  };
+  let label=map[t.name]||toolLabel(t.name);
+  if(t.error)label+=" — failed";
+  return label;
+}
 function toolTarget(input){return input?.path||input?.to||input?.query||input?.url||input?.url||''}
 function makeTree(text){
   // Root-level view only: directories first, then files. No recursive branches.
@@ -761,14 +786,15 @@ function showToolActivity(name,input){
   const chat=$("chat");
   removeTyping();
   const wrap=document.createElement("div");wrap.className="message assistant";
-  const card=document.createElement("div");card.className="tool-activity";
-  card.innerHTML='<div class="tool-activity-head"><div class="tool-activity-icon">'+toolIcon(name)+'</div><div class="tool-activity-text"><div class="tool-activity-title">'+esc(toolLabel(name))+'</div><div class="tool-activity-sub">'+esc(toolTarget(input)||"Working")+'</div></div><div class="tool-activity-status"><span class="tool-spinner"></span><span>Working</span></div></div><div class="tool-preview"></div>';
+  const card=document.createElement("div");card.className="tool-activity compact";
+  card.innerHTML='<div class="tool-activity-head"><div class="tool-activity-icon sm">'+toolIcon(name)+'</div><div class="tool-activity-text"><div class="tool-activity-title">'+esc(toolCompactLabel({name,input}))+'</div></div><div class="tool-activity-status"><span class="tool-spinner"></span></div></div><div class="tool-preview" style="display:none"></div>';
   wrap.appendChild(card);chat.appendChild(wrap);chat.scrollTop=chat.scrollHeight;
   return {update(result,error=false){
     card.querySelector(".tool-preview").innerHTML=toolPreview(name,input,result);
+    card.querySelector(".tool-preview").style.display="";
+    card.classList.add("done");
     const st=card.querySelector(".tool-activity-status");
-    st.className="tool-activity-status "+(error?"error":"done");
-    st.innerHTML=error?"<span>Failed</span>":'<svg><use href="#i-check"/></svg>';
+    st.innerHTML=error?'<span style="color:#ff7279">✕</span>':'<svg style="width:14px;height:14px;color:#7fd6a2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>';
     if(error)card.querySelector(".tool-activity-icon").style.color="#ff7279";
     chat.scrollTop=chat.scrollHeight;
   }};
@@ -787,16 +813,15 @@ document.addEventListener("click",e=>{const card=e.target.closest("#openProjectC
 $("modelBtn").onclick=()=>{openSheet("modelSheet");renderModels()}
 $("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;updateSearchUI();updateWorkspaceUI()}
 function updateSearchUI(){
-  const chk=$("searchOllamaChk");if(!chk)return;
-  chk.checked=state.searchOllama;
-  $("ollamaKeyInput").value=state.ollamaKey;
-  const keyOk=state.searchOllama&&state.ollamaKey;
-  $("ollamaKeyInput").style.display=state.searchOllama?"":"none";
-  const st=$("keyStatus");
-  if(!st)return;
+  const sel=$("searchProviderSel");if(!sel)return;
+  sel.value=state.searchProvider;
+  const st=$("keyStatus");if(!st)return;
   st.className="key-status";
-  st.textContent=state.searchOllama?(state.ollamaKey?(state._ollamaVerified?"Ollama search ✓ active":"Key saved — press Check key"):"Enter your Ollama API key"):"Free search (Bing / Google News)";
-  if(keyOk&&state._ollamaVerified)st.classList.add("ok");
+  const ollamaOn=state.searchProvider==="ollama"||(state.searchProvider==="auto"&&state.ollamaKey);
+  if(state.searchProvider==="free")st.textContent="Free search (Bing / Google News)";
+  else if(!state.ollamaKey)st.textContent="Enter your Ollama API key";
+  else if(state._ollamaVerified){st.className="key-status ok";st.textContent="Ollama search ✓ active"}
+  else st.textContent="Key saved — press Check key";
 }
 /* Quick key check: a 1-result search. Auto-runs on toggle/entry, manual button too. */
 async function verifyOllamaKey(){
@@ -819,18 +844,12 @@ async function verifyOllamaKey(){
     st.className="key-status bad";st.textContent="Key check failed (HTTP "+r.status+")";
   }
 }
-$("searchOllamaChk").onchange=e=>{
-  state.searchOllama=e.target.checked;save();updateSearchUI();
-  if(state.searchOllama&&state.ollamaKey&&!state._ollamaVerified)verifyOllamaKey();
-};
+$("searchProviderSel").onchange=e=>{state.searchProvider=e.target.value;save();updateSearchUI()}
 $("ollamaKeyInput").addEventListener("input",e=>{
   state.ollamaKey=e.target.value.trim();save();
-  // Entering a key means the user wants Ollama search: enable the toggle too.
-  if(state.ollamaKey&&!state.searchOllama){state.searchOllama=true;save();$("searchOllamaChk").checked=true}
 });
 $("ollamaKeyInput").addEventListener("change",e=>{
-  // Verify on commit (blur/enter) — input handler above already saved the value.
-  if(state.ollamaKey)verifyOllamaKey();else{state.searchOllama=false;save();updateSearchUI()}
+  if(state.ollamaKey)verifyOllamaKey();else updateSearchUI();
 });
 $("verifyOllamaBtn").onclick=verifyOllamaKey;
 $("wsEnabled").onchange=e=>{state.wsEnabled=e.target.checked;save();updateWorkspaceUI()}

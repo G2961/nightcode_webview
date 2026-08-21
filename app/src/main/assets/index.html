@@ -83,7 +83,13 @@
     <label>API key<input id="apiKey" type="password" placeholder="API key"></label>
     <button class="primary" id="saveSettings">Save &amp; refresh models</button>
     <div class="muted-label">Web search</div>
-    <label class="switch-row">Use Ollama search (API key)<input id="searchOllamaChk" type="checkbox"></label>
+    <label>Search engine
+      <select id="searchProviderSel">
+        <option value="auto">Auto (Ollama → free)</option>
+        <option value="ollama">Ollama (API key)</option>
+        <option value="free">Free (Bing / Google News)</option>
+      </select>
+    </label>
     <label>Ollama API key<input id="ollamaKeyInput" type="password" placeholder="ollama.com/settings/keys"></label>
     <button class="secondary" id="verifyOllamaBtn">Check key</button>
     <div class="key-status" id="keyStatus">Free search (Bing / Google News)</div>
