@@ -10,6 +10,7 @@ const state={
   key:localStorage.getItem("key")||"",
   summary:localStorage.getItem("summary")||"",
   settings:JSON.parse(localStorage.getItem("settings")||'{"input":128000,"output":6000,"auto":true,"threshold":80}'),
+  modelContext:JSON.parse(localStorage.getItem("modelContext")||"{}"),
   attachments:[],
   projectName:"",
   wsEnabled:localStorage.getItem("wsEnabled")==="1",
@@ -42,6 +43,7 @@ function save(){
   localStorage.setItem("key",state.key);
   localStorage.setItem("summary",state.summary);
   localStorage.setItem("settings",JSON.stringify(state.settings));
+  localStorage.setItem("modelContext",JSON.stringify(state.modelContext));
   localStorage.setItem("wsEnabled",state.wsEnabled?"1":"0");
   localStorage.setItem("searchOllama",state.searchOllama?"1":"0");
   localStorage.setItem("searchProvider",state.searchProvider);
@@ -364,11 +366,25 @@ function renderModels(){
     return `<button class="model-item ${sel?"selected":""}" onclick="selectModel('${encodeURIComponent(m.id)}')">
       <div class="model-icon p-${p}">${esc(p[0].toUpperCase())}</div>
       <div><div class="model-name">${esc(m.name||m.id)}</div><div class="model-provider">${esc(p)}</div></div>
+      ${state.modelContext&&state.modelContext[m.id]?`<span class="ctx-badge" title="Custom context settings">${fmtTokens(state.modelContext[m.id].input)}/${fmtTokens(state.modelContext[m.id].output)}</span>`:""}
       ${sel?'<span class="row-arrow" style="margin-left:auto;color:#93a5ff"><svg><use href="#i-check"/></svg></span>':""}
     </button>`;
   }).join("");
 }
 function updateModelBtn(){$("modelBtn").textContent=state.selected||"Model"}
+function fmtTokens(n){
+  n=Number(n)||0;
+  if(n>=1000)return Math.round(n/1000)+"k";
+  return String(n);
+}
+/* Effective context/output limits: per-model override wins, global defaults otherwise. */
+function getCtxLimits(){
+  const ov=state.modelContext&&state.selected?state.modelContext[state.selected]:null;
+  return ov?{input:ov.input,output:ov.output}:state.settings;
+}
+function isModelOverridden(){
+  return !!(state.modelContext&&state.selected&&state.modelContext[state.selected]);
+}
 function selectModel(id){state.selected=decodeURIComponent(id);save();updateModelBtn();closeSheets()}
 async function fetchModels(closeOnSuccess=false){
   $("settingsError").textContent="";
@@ -424,7 +440,8 @@ async function send(){
       +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
     let final="";const toolCalls=[];let allThinking="";
     for(let turn=0;turn<8;turn++){
-      const body={model:state.selected,max_tokens:Number(state.settings.output)||6000,system,messages};
+      const lim=getCtxLimits();
+      const body={model:state.selected,max_tokens:Number(lim.output)||6000,system,messages};
       // Web tools always available; file tools only with a connected project.
       const webTools=(state.searchProvider!=="free"&&state.ollamaKey)?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
       body.tools=proj?[...FILE_TOOLS,...webTools]:webTools;
@@ -497,8 +514,9 @@ async function send(){
 }
 function compactIfNeeded(){
   if(!state.settings.auto)return;
+  const lim=getCtxLimits();
   const estimate=state.messages.reduce((n,m)=>n+(m.text||"").length,0)/4;
-  if(estimate>Number(state.settings.input)*Number(state.settings.threshold)/100)compactNow(false);
+  if(estimate>Number(lim.input)*Number(state.settings.threshold)/100)compactNow(false);
 }
 function compactNow(show=true){
   if(state.messages.length<8){if(show)alert("Not enough messages to compact.");return}
@@ -919,8 +937,44 @@ $("saveSettings").onclick=async()=>{
 }
 $("refreshModels").onclick=()=>fetchModels()
 $("sheetScrim").onclick=closeSheets
-$("contextBtn").onclick=()=>{openSheet("contextSheet");$("inputTokens").value=state.settings.input;$("outputTokens").value=state.settings.output;$("autoCompact").checked=state.settings.auto;$("threshold").value=state.settings.threshold}
-$("saveContext").onclick=()=>{state.settings={input:Number($("inputTokens").value)||128000,output:Number($("outputTokens").value)||6000,auto:$("autoCompact").checked,threshold:Number($("threshold").value)||80};save();closeSheets()}
+$("contextBtn").onclick=()=>{
+  openSheet("contextSheet");
+  const lim=getCtxLimits();
+  $("inputTokens").value=lim.input;$("outputTokens").value=lim.output;
+  $("autoCompact").checked=state.settings.auto;$("threshold").value=state.settings.threshold;
+  $("perModelCtx").checked=isModelOverridden();
+  const note=$("ctxModelNote");
+  if(note){
+    note.textContent=isModelOverridden()
+      ?"Per-model settings: "+(state.selected||"unknown")
+      :"Global defaults (all models) — "+(state.selected?"current: "+state.selected:"no model selected");
+    note.classList.toggle("on",isModelOverridden());
+  }
+}
+$("perModelCtx").onchange=e=>{
+  const note=$("ctxModelNote");
+  if(note){
+    note.textContent=e.target.checked
+      ?"Per-model settings: "+(state.selected||"unknown")
+      :"Global defaults (all models) — "+(state.selected?"current: "+state.selected:"no model selected");
+    note.classList.toggle("on",e.target.checked);
+  }
+}
+$("saveContext").onclick=()=>{
+  const input=Number($("inputTokens").value)||128000;
+  const output=Number($("outputTokens").value)||6000;
+  if($("perModelCtx").checked&&state.selected){
+    if(!state.modelContext)state.modelContext={};
+    state.modelContext[state.selected]={input,output};
+  }else{
+    state.settings.input=input;
+    state.settings.output=output;
+    if(state.selected&&state.modelContext&&state.modelContext[state.selected])delete state.modelContext[state.selected];
+  }
+  state.settings.auto=$("autoCompact").checked;
+  state.settings.threshold=Number($("threshold").value)||80;
+  save();closeSheets();
+}
 $("compactNow").onclick=()=>compactNow(true)
 $("sendBtn").onclick=send
 $("input").addEventListener("input",resizeInput)
