@@ -565,7 +565,7 @@ async function send(){
         if(item.type==="thinking")reasoning+=(item.thinking||item.text||"")+"\n";
         if(item.reasoning_content)reasoning+=item.reasoning_content+"\n";
       }
-      const altMsg=data.choices&&data.choices[0]&&data.choices[0].message;
+      const altMsg=data2.choices&&data2.choices[0]&&data2.choices[0].message;
       if(!reasoning&&altMsg&&altMsg.reasoning_content)reasoning=altMsg.reasoning_content;
       // Keep thinking and answer SEPARATE: no <think>-wrapping into one string.
       // Re-merging and re-splitting breaks whenever the reasoning itself contains
