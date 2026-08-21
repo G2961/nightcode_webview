@@ -561,20 +561,37 @@ async function send(){
       const webTools=(state.searchProvider!=="free"&&state.ollamaKey)?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
       body.tools=proj?[...FILE_TOOLS,...webTools]:webTools;
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
-      let data=null;
+      // Full SSE parser: collects thinking, text AND tool_use blocks straight from
+      // the stream (content_block_start carries id/name, input_json_delta carries
+      // the input JSON). No second non-streaming request — that re-generation was
+      // slow and providers cut it off on long answers.
+      const blocks={};          // index -> {type,id,name,inputJson}
+      let stopReason=null;
+      const data={content:[]};
       ensureLiveCard();
       const r=await withRetry(()=>httpStream("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify(body),chunk=>{
         try{
           const ev=JSON.parse(chunk);
-          const tb=document.getElementById("liveBody"),tt=document.getElementById("liveTitle");
+          const tt=document.getElementById("liveTitle");
+          if(ev.type==="content_block_start"){
+            const b=ev.content_block||{};
+            blocks[ev.index]={type:b.type,id:b.id,name:b.name,inputJson:""};
+            if(b.type==="tool_use"&&tt)tt.textContent="Running tool: "+(b.name||"");
+          }
           if(ev.type==="content_block_delta"){
-            if(ev.delta&&ev.delta.thinking){ensureLiveCard();allThinking+=ev.delta.thinking;if(tb){tb.textContent=allThinking.slice(-3000);tb.scrollTop=tb.scrollHeight}autoScroll()}
-            if(ev.delta&&ev.delta.text){ensureLiveCard();final+=(final?"":"")+ev.delta.text;if(tt)tt.textContent="Writing…";autoScroll()}
+            const d=ev.delta||{};
+            if(d.thinking){
+              ensureLiveCard();allThinking+=d.thinking;
+              const tb=document.getElementById("liveBody");
+              if(tb){tb.textContent=allThinking.slice(-3000);tb.scrollTop=tb.scrollHeight}
+              autoScroll();
+            }
+            if(d.text){final+=d.text;if(tt)tt.textContent="Writing…";autoScroll()}
+            if(d.partial_json&&blocks[ev.index])blocks[ev.index].inputJson+=d.partial_json;
           }
-          if(ev.type==="content_block_start"&&ev.content_block&&ev.content_block.type==="tool_use"){
-            if(tt)tt.textContent="Running tool: "+(ev.content_block.name||"");
-          }
-      }catch(e){console.log("[NightCode] chunk handler error "+String(e&&e.message||e))}
+          if(ev.type==="message_delta"&&ev.delta&&ev.delta.stop_reason)stopReason=ev.delta.stop_reason;
+          if(ev.type==="error")stopReason="error:"+((ev.error||{}).message||"stream error");
+        }catch(e){console.log("[NightCode] chunk handler error "+String(e&&e.message||e))}
       }));
       if(r.error){
         const friendly=netErrMsg(r.errMsg||r.body);
@@ -593,27 +610,24 @@ async function send(){
           return;
         }
         hideLiveCard();
-        throw Error("HTTP "+r.status+": streaming failed after retries");
+        throw Error("HTTP "+r.status+": "+String(r.errMsg||"").slice(0,500));
       }
-      // After the stream we need the final structured content (tool_use blocks with
-      // ids): re-request non-streaming once, cheap because the provider caches it.
-      // The live card stays visible until this succeeds — no flicker on retry.
-      const r2=await withRetry(()=>httpFetch("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify({...body,stream:false})));
-      if(r2.error){
-        const friendly2=netErrMsg(r2.errMsg||r2.body);
-        throw Error(friendly2||("Network: "+r2.body.slice(0,1000)));
+      // Assemble Anthropic-style content from the streamed blocks.
+      const content=[];
+      for(const idx of Object.keys(blocks).map(Number).sort((a,b)=>a-b)){
+        const b=blocks[idx];
+        if(b.type==="text")content.push({type:"text",text:""});
+        else if(b.type==="thinking")content.push({type:"thinking",thinking:""});
+        else if(b.type==="tool_use"){
+          let parsed={};
+          try{parsed=JSON.parse(b.inputJson||"{}")}catch(e){console.log("[NightCode] tool input parse fail "+String(e&&e.message||e))}
+          content.push({type:"tool_use",id:b.id,name:b.name,input:parsed});
+        }
       }
-      if(r2.status<200||r2.status>=300)throw Error(r2.body.slice(0,1000));
-      const txt=r2.body;
-      console.log("[NightCode] /v1/messages response "+JSON.stringify({
-        url:reqUrl,model:state.selected,modelInBody:body.model,
-        status:r2.status,statusText:"",
-        contentType:"",
-        bodyLength:txt.length,bodyPreview:txt.slice(0,2000)
-      }));
-      const data2=JSON.parse(txt);
+      // Text/thinking arrived as deltas, already accumulated in final/allThinking.
+      const data2={content};
       hideLiveCard();
-      const content=data2.content||[];
+      console.log("[NightCode] stream complete "+JSON.stringify({stopReason,blocks:Object.keys(blocks).length,finalLen:final.length,thinkingLen:allThinking.length}));
       const toolUses=content.filter(x=>x.type==="tool_use");
       // Hidden reasoning arrives in different shapes depending on the backend:
       // Anthropic-style content blocks of type "thinking", or OpenAI-style
