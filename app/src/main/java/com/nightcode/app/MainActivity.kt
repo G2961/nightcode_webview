@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
 import android.util.Base64
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -29,6 +30,38 @@ class MainActivity : ComponentActivity() {
     private var projectName: String = ""
     private var workspaceRoot: DocumentFile? = null
     private var workspaceName: String = ""
+
+    @Volatile private var activeRequests = 0
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    /** Holds a partial wake lock while any HTTP request is in flight: Android
+     * freezes backgrounded apps and kills their sockets/DNS mid-request, which
+     * surfaced as "Unable to resolve host" after returning to the app. */
+    private fun beginRequest() {
+        synchronized(this) {
+            activeRequests++
+            if (activeRequests == 1) {
+                try {
+                    val pm = getSystemService(POWER_SERVICE) as PowerManager
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NightCode:http").apply {
+                        setReferenceCounted(false)
+                        acquire(10 * 60 * 1000L) // 10 min safety cap
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    private fun endRequest() {
+        synchronized(this) {
+            activeRequests--
+            if (activeRequests <= 0) {
+                activeRequests = 0
+                try { wakeLock?.takeIf { it.isHeld }?.release() } catch (_: Exception) {}
+                wakeLock = null
+            }
+        }
+    }
 
     @Volatile private var sysStatus = 0
     @Volatile private var sysNav = 0
@@ -515,6 +548,7 @@ class MainActivity : ComponentActivity() {
          */
         @JavascriptInterface
         fun httpStream(method: String, url: String, headersJson: String, body: String, cb: String) {
+            beginRequest()
             Thread {
                 var code = 0
                 var error = false
@@ -554,6 +588,7 @@ class MainActivity : ComponentActivity() {
                     error = true
                 }
                 js("window.__streamDone && window.__streamDone(${jsonString(cb)}, $code, ${jsonString(errMsg)}, $error)")
+                endRequest()
             }.start()
         }
 
@@ -571,6 +606,7 @@ class MainActivity : ComponentActivity() {
          */
         @JavascriptInterface
         fun httpRequest(method: String, url: String, headersJson: String, body: String, cb: String) {
+            beginRequest()
             Thread {
                 var code = 0
                 var respBody = ""
@@ -614,6 +650,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val payload = jsonString(respBody)
                 js("window.__httpResult && window.__httpResult(${jsonString(cb)}, $code, $payload, $error)")
+                endRequest()
             }.start()
         }
     }

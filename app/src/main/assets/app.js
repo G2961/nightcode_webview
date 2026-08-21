@@ -260,8 +260,11 @@ function httpStream(method,url,headers={},body="",onChunk){
     catch(e){delete streamCbs[cbId];resolve({status:0,errMsg:String(e&&e.message||e),error:true})}
   });
 }
-/* Retries with exponential backoff: 1s, 2s, 4s — for 5xx and network errors. */
-async function withRetry(fn,attempts=3){
+/* Retries with exponential backoff. Network-level failures (DNS/socket — Android
+   freezes background apps and kills their sockets) get extra attempts with longer
+   waits: the network is back within seconds after unfreeze, so waiting it out
+   beats failing the whole generation. HTTP 5xx: short standard backoff. */
+async function withRetry(fn,attempts=5){
   let lastErr=null;
   for(let i=0;i<attempts;i++){
     try{
@@ -270,12 +273,22 @@ async function withRetry(fn,attempts=3){
       lastErr=r;
     }catch(e){lastErr={status:0,errMsg:String(e&&e.message||e),error:true,body:String(e&&e.message||e)}}
     if(i<attempts-1){
-      const wait=1000*Math.pow(2,i);
-      console.log("[NightCode] retry "+(i+2)+"/"+attempts+" in "+wait+"ms (status="+(lastErr&&lastErr.status)+")");
+      const isNet=lastErr&&(lastErr.error||lastErr.status===0||/resolve host|unreachable|reset|timed out|EOF/i.test(String(lastErr.errMsg||lastErr.body||"")));
+      const wait=isNet?2000*Math.pow(2,i):1000*Math.pow(2,i);
+      console.log("[NightCode] retry "+(i+2)+"/"+attempts+" in "+wait+"ms ("+(isNet?"network":"http "+(lastErr&&lastErr.status))+")");
       await new Promise(res=>setTimeout(res,wait));
     }
   }
   return lastErr;
+}
+/* Human-readable message for network failures — usually means the app was
+   backgrounded mid-request and Android froze it. */
+function netErrMsg(raw){
+  const s=String(raw||"");
+  if(/resolve host|UnknownHost/i.test(s))return "Сеть отвалилась — похоже, приложение было свёрнуто и Android заморозил соединение. Подожди секунду и отправь ещё раз.";
+  if(/unreachable/i.test(s))return "Нет сети. Проверь подключение и повтори.";
+  if(/reset|EOF|timed out/i.test(s))return "Соединение оборвалось. Повтори запрос.";
+  return null;
 }
 function httpFetch(method,url,headers={},body){
   return new Promise(resolve=>{
@@ -563,7 +576,10 @@ async function send(){
           }
       }catch(e){console.log("[NightCode] chunk handler error "+String(e&&e.message||e))}
       }));
-      if(r.error)throw Error("Network: "+String(r.errMsg||"").slice(0,1000));
+      if(r.error){
+        const friendly=netErrMsg(r.errMsg||r.body);
+        throw Error(friendly||("Network: "+String(r.errMsg||r.body).slice(0,1000)));
+      }
       if(r.status<200||r.status>=300){
         console.log("[NightCode] stream failed after retries "+JSON.stringify({status:r.status,errMsg:String(r.errMsg||"").slice(0,500),finalLen:final.length,thinkingLen:allThinking.length}));
         // Keep whatever streamed in: show partial thinking instead of dropping it.
@@ -583,7 +599,10 @@ async function send(){
       // ids): re-request non-streaming once, cheap because the provider caches it.
       // The live card stays visible until this succeeds — no flicker on retry.
       const r2=await withRetry(()=>httpFetch("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify({...body,stream:false})));
-      if(r2.error)throw Error("Network: "+r2.body.slice(0,1000));
+      if(r2.error){
+        const friendly2=netErrMsg(r2.errMsg||r2.body);
+        throw Error(friendly2||("Network: "+r2.body.slice(0,1000)));
+      }
       if(r2.status<200||r2.status>=300)throw Error(r2.body.slice(0,1000));
       const txt=r2.body;
       console.log("[NightCode] /v1/messages response "+JSON.stringify({
