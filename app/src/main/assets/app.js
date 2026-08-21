@@ -18,7 +18,9 @@ const state={
   searchProvider:localStorage.getItem("searchProvider")||"auto",
   ollamaKey:localStorage.getItem("ollamaKey")||"",
   sessions:JSON.parse(localStorage.getItem("sessions")||"[]"),
-  projects:JSON.parse(localStorage.getItem("projects")||"[]")
+  projects:JSON.parse(localStorage.getItem("projects")||"[]"),
+  extEnabled:JSON.parse(localStorage.getItem("extEnabled")||"{}"),
+  extInline:JSON.parse(localStorage.getItem("extInline")||"[]")
 };
 
 function save(){
@@ -50,6 +52,8 @@ function save(){
   localStorage.setItem("ollamaKey",state.ollamaKey);
   localStorage.setItem("sessions",JSON.stringify(state.sessions));
   localStorage.setItem("projects",JSON.stringify(state.projects));
+  localStorage.setItem("extEnabled",JSON.stringify(state.extEnabled));
+  localStorage.setItem("extInline",JSON.stringify(state.extInline));
 }
 
 /* ── System banner (non-chat status messages) ── */
@@ -131,6 +135,11 @@ function welcomeHtml(){
       <span class="quick-text"><b>Open project</b><small id="openProjectSub">${projectSub}</small></span>
       <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
     </button>
+    <button class="quick" onclick="openConsole()">
+      <span class="quick-ico"><svg><use href="#i-term"/></svg></span>
+      <span class="quick-text"><b>Console</b><small>Shell, JS REPL, logs</small></span>
+      <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
+    </button>
   </section>`;
 }
 function messageHtml(m){
@@ -161,9 +170,6 @@ function messageHtml(m){
   }
   const bodyText=m.text;
   const bubbleHtml=m.role==="assistant"?md(bodyText,{reasoningDurationMs:m.reasoning}):esc(m.text||"");
-  if(m.role==="assistant"){
-    console.log("[NightCode] rendered assistant msg html "+JSON.stringify({hasReasoningCard:reasoningHtml.length>0,reasoningHtmlPrefix:reasoningHtml.slice(0,120),bubbleHtml:bubbleHtml.slice(0,120),mText:m.text.slice(0,200)}));
-  }
   return `<div class="message ${m.role}">${files}${tools}${reasoningHtml}<div class="bubble">${bubbleHtml}</div>${time}</div>`;
 }
 function render(){
@@ -332,6 +338,8 @@ window.__onProjectPicked=function(name){
   }else{
     // User cancelled the picker: keep previous state, no fake "connected" notice.
   }
+  SHELL.listing=null;SHELL.cwd=[];
+  loadExtensions();
   render();
 };
 window.__onWorkspacePicked=function(name){
@@ -341,6 +349,7 @@ window.__onWorkspacePicked=function(name){
   }
   updateWorkspaceUI();
   save();
+  loadExtensions();
 };
 function updateWorkspaceUI(){
   const st=$("workspaceStatus");if(!st)return;
@@ -421,6 +430,7 @@ function renderRecent(){
 function addMessage(role,text,attachments=[]){
   state.messages.push({id:crypto.randomUUID?crypto.randomUUID():String(Date.now()),role,text,attachments,ts:Date.now()});
   save();saveCurrentChat();render();
+  fireExt("message",{role,text});
 }
 function renderAttachments(){
   $("attachments").innerHTML=state.attachments.map((a,i)=>{
@@ -499,8 +509,17 @@ async function fetchModels(closeOnSuccess=false){
     if(closeOnSuccess)closeSheets();
   }catch(e){$("settingsError").textContent=e.message||"Refresh failed"}
 }
-async function send(){
-  const input=$("input");const prompt=input.value.trim();
+async function send(override){
+  const input=$("input");
+  const prompt=(typeof override==="string"?override:input.value).trim();
+  // Slash commands never reach the model: intercept before the settings guard
+  // so /help etc. work even without a configured API.
+  if(prompt.startsWith("/")){
+    input.value="";resizeInput();
+    $("slashMenu").classList.remove("show");
+    await handleSlash(prompt);
+    return;
+  }
   if(!prompt&&!state.attachments.length)return;
   if(!state.base||!state.key||!state.selected){openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;return}
   const at=[...state.attachments];
@@ -572,7 +591,8 @@ async function send(){
       const body={model:state.selected,max_tokens:Number(lim.output)||6000,system,messages,stream:true};
       // Web tools always available; file tools only with a connected project.
       const webTools=(state.searchProvider!=="free"&&state.ollamaKey)?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
-      body.tools=proj?[...FILE_TOOLS,...webTools]:webTools;
+      // Extension tools ride along in every mode — they may not need a project.
+      body.tools=[...(proj?FILE_TOOLS:[]),...webTools,...extToolDefs()];
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
       // Full SSE parser: collects thinking, text AND tool_use blocks straight from
       // the stream (content_block_start carries id/name, input_json_delta carries
@@ -671,6 +691,7 @@ async function send(){
           out=res.result;err=res.error;
           activity.update(out,err);
         }catch(e){out=String(e.message||e);err=true;activity.update(out,true)}
+        fireExt("tool",{name:u.name,input:u.input||{},result:String(out),error:err});
         toolCalls.push({name:u.name,input:u.input||{},result:String(out),error:err});
         results.push({type:"tool_result",tool_use_id:u.id,is_error:err,content:String(out)});
       }
@@ -881,6 +902,15 @@ async function runWebSearch(query){
   return {result:"SEARCH_FAILED: no results (network or parsing error)",error:true};
 }
 async function runTool(name,input){
+  // Extension tools first: they may shadow nothing built-in, but win on unknown names.
+  const et=EXT.tools.get(name);
+  if(et){
+    if(!extEnabled(et.ext))return {result:"TOOL_DISABLED (extension '"+et.ext+"' is off)",error:true};
+    try{
+      const r=await et.run(input||{});
+      return r&&typeof r==="object"?r:{result:String(r),error:false};
+    }catch(e){return {result:String(e&&e.message||e),error:true}}
+  }
   if(name==="web_search")return runWebSearch(input.query);
   if(name==="web_fetch"){
     let url=String(input.url||"").trim();
@@ -938,7 +968,7 @@ async function runTool(name,input){
       .replace(/<[^>]+>/g," ").replace(/&amp;/g,"&").replace(/&nbsp;/g," ").replace(/\s+/g," ").trim();
     return {result:("URL: "+url+"\n\n"+text).slice(0,12000),error:false};
   }
-  if(name==="list_files")return fsCall("fsList");
+  if(name==="list_files")return fsCall("fsList","");
   if(name==="read_file")return fsCall("fsRead",input.path);
   if(name==="search_files")return fsCall("fsSearch",input.query);
   if(name==="write_file")return fsCall("fsWrite",input.path,btoa(unescape(encodeURIComponent(String(input.content||"")))));
@@ -949,6 +979,491 @@ async function runTool(name,input){
 }
 function hasProject(){
   return !!(window.Android&&Android.hasProject&&Android.hasProject());
+}
+
+/* ── Console: Shell over the connected folder + JS REPL + log viewer ── */
+const CON={tab:"shell",welcomed:false,
+  hist:{shell:JSON.parse(localStorage.getItem("ncHistShell")||"[]"),js:JSON.parse(localStorage.getItem("ncHistJs")||"[]")},
+  hi:{shell:-1,js:-1}};
+const LOGBUF=[];
+const MONO="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+(function patchConsole(){
+  // Capture app logs so the Logs tab shows what logcat would — no ADB needed.
+  const fmt=v=>typeof v==="string"?v:(()=>{try{return JSON.stringify(v)}catch(e){return String(v)}})();
+  for(const level of ["log","info","warn","error"]){
+    const orig=console[level]?console[level].bind(console):null;
+    console[level]=function(...a){
+      const entry={t:Date.now(),level,text:a.map(fmt).join(" ")};
+      LOGBUF.push(entry);
+      if(LOGBUF.length>400)LOGBUF.shift();
+      if(CON.tab==="logs")coAppendLog(entry);
+      orig&&orig(...a);
+    };
+  }
+})();
+function coPrint(text="",cls=""){
+  const out=$("consoleOut");if(!out)return;
+  const d=document.createElement("div");
+  d.className="co-line "+cls;
+  d.textContent=text;
+  out.appendChild(d);
+  while(out.children.length>900)out.firstChild.remove();
+  out.scrollTop=out.scrollHeight;
+}
+function coAppendLog(e){
+  const out=$("consoleOut");if(!out)return;
+  const d=document.createElement("div");
+  d.className="co-line co-log l-"+e.level;
+  d.textContent=new Date(e.t).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})+"  "+e.text;
+  out.appendChild(d);
+  while(out.children.length>900)out.firstChild.remove();
+  out.scrollTop=out.scrollHeight;
+}
+function renderLogs(){
+  $("consoleOut").innerHTML="";
+  if(!LOGBUF.length){coPrint("(no logs yet — app activity will appear here)","co-dim");return}
+  for(const e of LOGBUF)coAppendLog(e);
+  const out=$("consoleOut");out.scrollTop=out.scrollHeight;
+}
+/* Virtual shell state: cwd as path segments, listing cached until a write. */
+const SHELL={cwd:[],listing:null};
+function shellPrompt(){return "nc:/"+SHELL.cwd.join("/")+(SHELL.cwd.length?"/":"")+"$"}
+function tokenize(line){
+  const out=[];const re=/"([^"]*)"|'([^']*)'|(\S+)/g;let m;
+  while((m=re.exec(line)))out.push(m[1]!=null?m[1]:(m[2]!=null?m[2]:m[3]));
+  return out;
+}
+async function shellList(){
+  if(SHELL.listing)return SHELL.listing;
+  const r=await fsCall("fsList","");
+  if(r.error){
+    if(r.result==="NO_PROJECT")throw Error("no folder connected — tap + → Project folder");
+    if(r.result==="NO_BRIDGE")throw Error("filesystem bridge unavailable (browser preview)");
+    throw Error(r.result);
+  }
+  SHELL.listing=(r.result==="EMPTY_PROJECT")?[]:r.result.split("\n").filter(Boolean);
+  return SHELL.listing;
+}
+function resolveSegs(arg){
+  const parts=(arg.startsWith("/")?[]:[...SHELL.cwd]).concat(arg.split("/"));
+  const out=[];
+  for(const p of parts){
+    if(!p||p===".")continue;
+    if(p==="..")out.pop();
+    else out.push(p);
+  }
+  return out;
+}
+function underDir(listing,dir){
+  const pre=dir.join("/");const out=[];
+  for(let e of listing){
+    const isDir=e.endsWith("/");const p=isDir?e.slice(0,-1):e;
+    let rest;
+    if(pre){if(!p.startsWith(pre+"/"))continue;rest=p.slice(pre.length+1)}
+    else{if(p.includes("/"))continue;rest=p}
+    if(!rest||rest.includes("/"))continue;
+    out.push({name:rest,dir:isDir});
+  }
+  return out.sort((a,b)=>(a.dir===b.dir?0:(a.dir?-1:1))||a.name.localeCompare(b.name));
+}
+async function headTail(a,first){
+  let n=10;const args=[...a];
+  if(args[0]==="-n"&&args[1]){n=parseInt(args[1],10)||10;args.splice(0,2)}
+  const file=args[0];
+  if(!file)throw Error("file required (head/tail -n N file)");
+  const r=await fsCall("fsRead",resolveSegs(file).join("/"));
+  if(r.error)throw Error(r.result==="FILE_NOT_FOUND"?"no such file: "+file:r.result);
+  const lines=r.result.split("\n");
+  coPrint((first?lines.slice(0,n):lines.slice(-n)).join("\n")||"(empty file)");
+  if(lines.length>n)coPrint("… "+lines.length+" lines total","co-dim");
+}
+const SHELL_CMDS={
+  help:{d:"show commands",async run(){
+    coPrint("NightCode shell — operates on the connected folder (SAF bridge)","co-dim");
+    for(const n of Object.keys(SHELL_CMDS).sort())coPrint("  "+n.padEnd(9)+SHELL_CMDS[n].d);
+    coPrint("Relative paths, cd/.. work. `js <expr>` evaluates JS in the app.","co-dim");
+  }},
+  pwd:{d:"print working dir",async run(){coPrint("/"+SHELL.cwd.join("/"))}},
+  ls:{d:"list directory",async run(a){
+    const dir=resolveSegs(a[0]||".");
+    const listing=await shellList();
+    if(dir.length){
+      const full=dir.join("/")+"/";
+      if(!listing.some(e=>e===full||e.startsWith(full)))throw Error("ls: no such directory: "+a[0]);
+    }
+    const es=underDir(listing,dir);
+    if(!es.length){coPrint("(empty)","co-dim");return}
+    for(const e of es)coPrint(e.name+(e.dir?"/":""),e.dir?"co-dir":"");
+  }},
+  cd:{d:"change directory",async run(a){
+    if(!a[0]||a[0]==="/"){SHELL.cwd=[];return}
+    const dir=resolveSegs(a[0]);
+    if(!dir.length){SHELL.cwd=[];return}
+    const listing=await shellList();
+    const full=dir.join("/")+"/";
+    if(!listing.some(e=>e===full||e.startsWith(full)))throw Error("cd: no such directory: "+a[0]);
+    SHELL.cwd=dir;
+  }},
+  cat:{d:"print file",async run(a){
+    if(!a[0])throw Error("cat: file required");
+    const r=await fsCall("fsRead",resolveSegs(a[0]).join("/"));
+    if(r.error)throw Error("cat: "+(r.result==="FILE_NOT_FOUND"?"no such file: "+a[0]:r.result));
+    coPrint(r.result||"(empty file)");
+  }},
+  head:{d:"first N lines",async run(a){await headTail(a,true)}},
+  tail:{d:"last N lines",async run(a){await headTail(a,false)}},
+  grep:{d:"grep pattern [file]",async run(a){
+    let ci=false;const args=[...a];
+    if(args[0]==="-i"){ci=true;args.shift()}
+    const pat=args[0];
+    if(!pat)throw Error("grep: pattern required");
+    if(args[1]){
+      const r=await fsCall("fsRead",resolveSegs(args[1]).join("/"));
+      if(r.error)throw Error("grep: "+r.result);
+      const re=new RegExp(pat,ci?"i":"");
+      const hits=r.result.split("\n").map((l,i)=>[i+1,l]).filter(([,l])=>re.test(l));
+      if(!hits.length){coPrint("(no matches)","co-dim");return}
+      for(const [n,l] of hits.slice(0,200))coPrint(n+": "+l.trim().slice(0,300));
+    }else{
+      const r=await fsCall("fsSearch",pat);
+      if(r.error)throw Error("grep: "+r.result);
+      const res=r.result==="NO_MATCHES"?[]:r.result.split("\n").filter(Boolean);
+      if(!res.length){coPrint("(no matches)","co-dim");return}
+      for(const f of res)coPrint(f,"co-dir");
+    }
+  }},
+  find:{d:"find by name",async run(a){
+    if(!a[0])throw Error("find: name required");
+    const listing=await shellList();
+    const hits=listing.filter(e=>e.toLowerCase().includes(a[0].toLowerCase()));
+    if(!hits.length){coPrint("(nothing found)","co-dim");return}
+    for(const h of hits)coPrint(h,"co-dir");
+  }},
+  tree:{d:"folder tree (2 levels)",async run(){
+    const listing=await shellList();
+    const pre=SHELL.cwd.join("/");
+    const set=new Set();
+    for(let e of listing){
+      const isDir=e.endsWith("/");const p=isDir?e.slice(0,-1):e;
+      if(pre&&!p.startsWith(pre+"/"))continue;
+      const rest=pre?p.slice(pre.length+1):p;
+      if(!rest)continue;
+      const segs=rest.split("/");
+      set.add(segs.slice(0,2).join("/")+(isDir&&segs.length<=2?"/":""));
+    }
+    const rows=[...set].sort();
+    if(!rows.length){coPrint("(empty)","co-dim");return}
+    rows.forEach((r,i)=>coPrint((i===rows.length-1?"└─ ":"├─ ")+r,r.endsWith("/")?"co-dir":""));
+    if(rows.length>=40)coPrint("… "+rows.length+" shown, deeper entries hidden — use ls/cd","co-dim");
+  }},
+  mkdir:{d:"create directory",async run(a){
+    if(!a[0])throw Error("mkdir: name required");
+    const r=await fsCall("fsMkdir",resolveSegs(a[0]).join("/"));
+    if(r.error)throw Error("mkdir: "+r.result);
+    SHELL.listing=null;
+    coPrint("created "+a[0],"co-ok");
+  }},
+  rm:{d:"delete file",async run(a){
+    if(!a[0])throw Error("rm: file required");
+    const r=await fsCall("fsDelete",resolveSegs(a[0]).join("/"));
+    if(r.error)throw Error("rm: "+(r.result==="FILE_NOT_FOUND"?"no such file: "+a[0]:r.result));
+    SHELL.listing=null;
+    coPrint("deleted "+a[0],"co-ok");
+  }},
+  mv:{d:"move/rename from to",async run(a){
+    if(a.length<2)throw Error("mv: from and to required");
+    const from=resolveSegs(a[0]).join("/");
+    const to=resolveSegs(a[1]).join("/");
+    const r=await fsCall("fsRename",from,to);
+    if(r.error)throw Error("mv: "+r.result);
+    SHELL.listing=null;
+    coPrint(from+" → "+to,"co-ok");
+  }},
+  cp:{d:"copy from to",async run(a){
+    if(a.length<2)throw Error("cp: from and to required");
+    const from=resolveSegs(a[0]).join("/");
+    const to=resolveSegs(a[1]).join("/");
+    const rd=await fsCall("fsRead",from);
+    if(rd.error)throw Error("cp: "+rd.result);
+    const wr=await fsCall("fsWrite",to,btoa(unescape(encodeURIComponent(rd.result))));
+    if(wr.error)throw Error("cp: "+wr.result);
+    SHELL.listing=null;
+    coPrint(from+" → "+to,"co-ok");
+  }},
+  touch:{d:"create empty file",async run(a){
+    if(!a[0])throw Error("touch: file required");
+    const p=resolveSegs(a[0]).join("/");
+    const ex=await fsCall("fsRead",p);
+    if(!ex.error){coPrint(p+" already exists");return}
+    const w=await fsCall("fsWrite",p,btoa(""));
+    if(w.error)throw Error("touch: "+w.result);
+    SHELL.listing=null;
+    coPrint("created "+p,"co-ok");
+  }},
+  echo:{d:"print / write > file",async run(a,raw){
+    let text=raw.replace(/^\s*echo\s?/,"");
+    const m=text.match(/^(.*?)\s*(>>?)\s*(\S+)\s*$/);
+    if(!m){coPrint(text);return}
+    let content=m[1];
+    if((content.startsWith('"')&&content.endsWith('"'))||(content.startsWith("'")&&content.endsWith("'")))content=content.slice(1,-1);
+    const target=resolveSegs(m[3]).join("/");
+    if(m[2]===">>"){
+      const old=await fsCall("fsRead",target);
+      if(!old.error)content=(old.result?old.result+"\n":"")+content;
+    }
+    const w=await fsCall("fsWrite",target,btoa(unescape(encodeURIComponent(content))));
+    if(w.error)throw Error("echo: "+w.result);
+    SHELL.listing=null;
+    coPrint("wrote "+target,"co-ok");
+  }},
+  js:{d:"evaluate JS",async run(a,raw){
+    const code=raw.replace(/^\s*js\s?/,"");
+    if(!code.trim())throw Error("js: expression required");
+    const r=await replEval(code);
+    coPrint(r.text,r.ok?"co-ok":"co-err");
+  }},
+  open:{d:"open URL in browser",async run(a){
+    if(!a[0])throw Error("open: url required");
+    if(window.Android&&Android.openUrl)Android.openUrl(/^https?:\/\//.test(a[0])?a[0]:"https://"+a[0]);
+    else throw Error("open: available in the Android app");
+  }},
+  send:{d:"ask the agent",async run(a,raw){
+    const p=raw.replace(/^\s*send\s?/,"").trim();
+    if(!p)throw Error("send: prompt required");
+    closeSheets();
+    await send(p);
+  }},
+  history:{d:"command history",async run(){
+    if(!CON.hist.shell.length){coPrint("(empty)","co-dim");return}
+    for(const h of CON.hist.shell)coPrint(h,"co-dim");
+  }},
+  clear:{d:"clear output",async run(){$("consoleOut").innerHTML=""}}
+};
+async function runShellLine(raw){
+  coPrint(shellPrompt()+" "+raw,"co-cmd");
+  pushHist("shell",raw.trim());
+  const line=raw.trim();
+  if(!line)return;
+  const parts=tokenize(line);
+  const c=SHELL_CMDS[parts[0]];
+  if(!c){coPrint(parts[0]+": command not found — try `help`","co-err");return}
+  try{await c.run(parts.slice(1),line)}
+  catch(e){coPrint(String(e&&e.message||e),"co-err")}
+}
+async function replEval(code){
+  const fmtVal=v=>{
+    if(v===undefined)return "undefined";
+    if(typeof v==="function")return "ƒ "+(v.name||"anonymous");
+    try{const s=JSON.stringify(v,null,1);return s===undefined?String(v):s}
+    catch(e){return String(v)}
+  };
+  try{
+    let v;
+    if(/\bawait\b/.test(code)){
+      try{v=await (0,eval)("(async()=>("+code+"))()")}
+      catch(e){if(!(e instanceof SyntaxError))throw e}
+      v=await (0,eval)("(async()=>{"+code+"})()");
+    }else{
+      try{v=(0,eval)("("+code+")")}
+      catch(e){if(!(e instanceof SyntaxError))throw e}
+      v=(0,eval)(code);
+    }
+    return {ok:true,text:fmtVal(v)};
+  }catch(e){return {ok:false,text:String(e&&e.message||e)}}
+}
+async function runJsLine(raw){
+  coPrint("js> "+raw,"co-cmd");
+  pushHist("js",raw.trim());
+  if(!raw.trim())return;
+  const r=await replEval(raw);
+  coPrint(r.text,r.ok?"co-ok":"co-err");
+}
+function pushHist(tab,line){
+  if(!line)return;
+  const h=CON.hist[tab];
+  if(h[h.length-1]!==line)h.push(line);
+  while(h.length>50)h.shift();
+  localStorage.setItem(tab==="shell"?"ncHistShell":"ncHistJs",JSON.stringify(h));
+  CON.hi[tab]=-1;
+}
+function setConsoleTab(tab){
+  CON.tab=tab;
+  document.querySelectorAll(".ctab").forEach(b=>b.classList.toggle("active",b.dataset.ctab===tab));
+  $("consoleRow").style.display=tab==="logs"?"none":"flex";
+  $("consolePrompt").textContent=tab==="js"?"js>":shellPrompt();
+  $("consoleInput").placeholder=tab==="js"?"expression (Enter to eval)":"help";
+  if(tab==="logs")renderLogs();
+}
+function updateConsoleInfo(){
+  const el=$("consoleInfo");
+  if(el)el.textContent=state.projectName?("📁 "+state.projectName):"no folder";
+}
+function openConsole(){
+  openSheet("consoleSheet");
+  updateConsoleInfo();
+  setConsoleTab(CON.tab);
+  if(!CON.welcomed){
+    CON.welcomed=true;
+    coPrint("NightCode console — the shell runs on the connected folder; try `help`","co-dim");
+  }
+  setTimeout(()=>{try{$("consoleInput").focus()}catch(e){}},250);
+}
+
+/* ── Extensions: user JS that adds agent tools, slash commands and hooks ── */
+const EXT={tools:new Map(),commands:new Map(),events:{message:[],tool:[]},exts:[]};
+function extEnabled(name){return state.extEnabled[name]!==false}
+function fireExt(ev,payload){
+  for(const h of (EXT.events[ev]||[])){
+    try{h(payload)}
+    catch(e){console.log("[NightCode] ext "+ev+" handler error "+String(e&&e.message||e))}
+  }
+}
+function extToolDefs(){
+  const out=[];
+  for(const t of EXT.tools.values())
+    if(extEnabled(t.ext))out.push({name:t.name,description:t.description||t.name,input_schema:t.schema||{type:"object",properties:{}}});
+  return out;
+}
+function makeNcApi(meta,allowRegister){
+  const api={
+    on(ev,fn){if(EXT.events[ev]&&typeof fn==="function")EXT.events[ev].push(fn)},
+    http:(m,u,h,b)=>httpFetch(m,u,h,b),
+    fs:{
+      read:async p=>{const r=await fsCall("fsRead",p);if(r.error)throw Error(r.result);return r.result},
+      write:async(p,c)=>{const r=await fsCall("fsWrite",p,btoa(unescape(encodeURIComponent(String(c||"")))));if(r.error)throw Error(r.result);return r.result},
+      list:async p=>{const r=await fsCall("fsList",p||"");if(r.error)throw Error(r.result);return r.result==="EMPTY_PROJECT"?[]:r.result.split("\n").filter(Boolean)}
+    },
+    banner:showBanner,
+    chat:t=>addMessage("assistant",String(t)),
+    send:t=>send(String(t)),
+    get state(){return {model:state.selected,project:state.projectName,hasProject:hasProject(),messages:state.messages.length}}
+  };
+  if(!allowRegister)return api;
+  api.register=def=>{
+    def=def||{};
+    const name=def.name||meta.name;
+    const rec={name,version:def.version||"",file:meta.file,tools:[],commands:[],error:""};
+    if(def.tools)for(const t of def.tools){
+      if(!t||!t.name||typeof t.run!=="function"){rec.error="tool missing name/run";continue}
+      if(EXT.tools.has(t.name)&&EXT.tools.get(t.name).ext!==name){rec.error="duplicate tool "+t.name;continue}
+      EXT.tools.set(t.name,{...t,ext:name});
+      rec.tools.push(t.name);
+    }
+    if(def.commands)for(const [cname,fn] of Object.entries(def.commands)){
+      const key=cname.replace(/^\//,"");
+      if(typeof fn!=="function")continue;
+      EXT.commands.set(key,{fn,ext:name,desc:(def.commandHelp&&def.commandHelp[key])||""});
+      rec.commands.push(key);
+    }
+    EXT.exts.push(rec);
+  };
+  return api;
+}
+async function loadExtensions(){
+  EXT.tools.clear();EXT.commands.clear();
+  EXT.events={message:[],tool:[]};EXT.exts.length=0;
+  const sources=[];
+  // 1) workspace/extensions/*.js — persistent across projects
+  if(window.Android&&Android.hasWorkspace&&Android.hasWorkspace()){
+    const r=await fsCall("fsList","workspace:extensions");
+    if(!r.error&&r.result&&r.result!=="EMPTY_PROJECT")
+      for(const l of r.result.split("\n"))if(l.endsWith(".js"))sources.push({name:l.replace(/\.js$/,""),file:"workspace:extensions/"+l,src:null});
+  }
+  // 2) project .nightcode/extensions/*.js — tools shipped with the repo
+  if(hasProject()){
+    const r=await fsCall("fsList","");
+    if(!r.error&&r.result&&r.result!=="EMPTY_PROJECT")
+      for(const l of r.result.split("\n"))if(/^\.nightcode\/extensions\/[^/]+\.js$/.test(l))sources.push({name:l.split("/").pop().replace(/\.js$/,""),file:l,src:null});
+  }
+  // 3) inline snippets saved in the manager
+  state.extInline.forEach((src,i)=>sources.push({name:"inline"+(i+1),file:"inline#"+i,src}));
+  for(const s of sources){
+    let src=s.src;
+    if(src==null){
+      const r=await fsCall("fsRead",s.file);
+      if(r.error){EXT.exts.push({name:s.name,file:s.file,tools:[],commands:[],error:"read failed: "+r.result});continue}
+      src=r.result;
+    }
+    try{(new Function("nc",'"use strict";\n'+src))(makeNcApi({name:s.name,file:s.file},true))}
+    catch(e){EXT.exts.push({name:s.name,file:s.file,tools:[],commands:[],error:String(e&&e.message||e)})}
+  }
+  console.log("[NightCode] extensions loaded "+JSON.stringify({sources:sources.length,tools:EXT.tools.size,commands:EXT.commands.size}));
+  renderExtList();
+}
+function renderExtList(){
+  const box=$("extList");if(!box)return;
+  if(!EXT.exts.length){
+    box.innerHTML='<div class="ext-empty">No extensions loaded.<br>Drop .js files into <b>workspace/extensions/</b><br>or <b>.nightcode/extensions/</b> in the project.</div>';
+    return;
+  }
+  box.innerHTML=EXT.exts.map(e=>{
+    const on=extEnabled(e.name);
+    const del=e.file.match(/^inline#(\d+)$/);
+    return `<div class="ext-row ${e.error?"err":""}">
+      <div class="ext-main">
+        <div class="ext-name">${esc(e.name)}${e.version?' <small>v'+esc(e.version)+"</small>":""}</div>
+        <div class="ext-meta">${e.error?("⚠ "+esc(e.error)):(e.tools.length+" tools · "+e.commands.length+" cmds · "+esc(e.file))}</div>
+      </div>
+      ${del?`<button class="ext-del" onclick="delInlineExt(${del[1]})">remove</button>`:""}
+      <label class="ext-toggle"><input type="checkbox" ${on?"checked":""} onchange="toggleExt(decodeURIComponent('${encodeURIComponent(e.name)}'),this.checked)"></label>
+    </div>`;
+  }).join("");
+}
+function toggleExt(name,on){state.extEnabled[name]=on;save()}
+function delInlineExt(i){state.extInline.splice(Number(i)||0,1);save();loadExtensions()}
+
+/* ── Slash commands (built-in + extension) with autocomplete ── */
+const SLASH_BUILTIN={
+  help:{desc:"list commands",fn(){
+    const rows=Object.entries(SLASH_BUILTIN).map(([n,d])=>"/"+n+" — "+d.desc);
+    for(const [n,c] of EXT.commands)if(extEnabled(c.ext))rows.push("/"+n+(c.desc?" — "+c.desc:""));
+    addMessage("assistant","Commands:\n"+rows.sort().join("\n"));
+  }},
+  new:{desc:"start a new chat",fn(){newChat()}},
+  compact:{desc:"compact context now",fn(){compactNow(false);showBanner("Context compacted")}},
+  tools:{desc:"list agent tools",fn(){
+    const base=(hasProject()?FILE_TOOLS.map(t=>t.name):[]).concat(["web_search","web_fetch"]);
+    const ext=[...EXT.tools.values()].filter(t=>extEnabled(t.ext)).map(t=>t.name);
+    addMessage("assistant","Agent tools:\n"+base.concat(ext).join("\n"));
+  }},
+  ext:{desc:"list extensions",fn(){openSheet("extSheet");renderExtList()}},
+  console:{desc:"open console",fn(){openConsole()}},
+  model:{desc:"choose model",fn(){$("modelBtn").click()}}
+};
+async function handleSlash(prompt){
+  const sp=prompt.indexOf(" ");
+  const name=(sp<0?prompt:prompt.slice(0,sp)).replace(/^\//,"");
+  const argsStr=sp<0?"":prompt.slice(sp+1).trim();
+  const b=SLASH_BUILTIN[name];
+  if(b){try{b.fn(argsStr)}catch(e){showBanner("Command failed: "+(e&&e.message||e))}return}
+  const c=EXT.commands.get(name);
+  if(c){
+    if(!extEnabled(c.ext)){showBanner("Extension '"+c.ext+"' is disabled");return}
+    try{await c.fn(argsStr,makeNcApi({name:c.ext,file:"command"},false))}
+    catch(e){addMessage("assistant","⚠️ Command /"+name+" failed: "+(e&&e.message||e))}
+    return;
+  }
+  showBanner("Unknown command /"+name+" — /help lists commands");
+}
+function slashCommands(){
+  const out=[];
+  for(const [n,d] of Object.entries(SLASH_BUILTIN))out.push({name:n,desc:d.desc});
+  for(const [n,c] of EXT.commands)if(extEnabled(c.ext))out.push({name:n,desc:c.desc||(c.ext+" extension")});
+  return out;
+}
+function updateSlashMenu(){
+  const menu=$("slashMenu");if(!menu)return;
+  const v=$("input").value;
+  if(!v.startsWith("/")||v.includes(" ")||v.includes("\n")){menu.classList.remove("show");return}
+  const hits=slashCommands().filter(c=>c.name.startsWith(v.slice(1).toLowerCase()));
+  if(!hits.length){menu.classList.remove("show");return}
+  menu.innerHTML=hits.map(c=>`<button class="slash-item" data-cmd="${esc(c.name)}"><b>/${esc(c.name)}</b><small>${esc(c.desc)}</small></button>`).join("");
+  menu.classList.add("show");
+  menu.querySelectorAll(".slash-item").forEach(b=>b.onclick=()=>{
+    $("input").value="/"+b.dataset.cmd+" ";
+    menu.classList.remove("show");
+    $("input").focus();
+  });
 }
 
 /* ── Chat sessions & projects (grouping) ── */
@@ -991,9 +1506,10 @@ function toolIcon(name){
     rename_file:'<path d="M5 5h14v14H5z"/><path d="m8 15 7-7M13 8h2v2"/>',
     delete_file:'<path d="M5 7h14M9 7V4h6v3M8 10v7M12 10v7M16 10v7M6 7l1 13h10l1-13"/>',
     web_search:'<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5S14.6 18.2 12 20.5c-2.6-2.3-3.9-5.2-3.9-8.5S9.4 5.8 12 3.5z"/>',
-    web_fetch:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/>'
+    web_fetch:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/>',
+    __ext:'<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M16.5 13.5v6M13.5 16.5h6"/>'
   };
-  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.get_file_info)+'</svg>';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.__ext)+'</svg>';
 }
 function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page'}[name]||String(name||'').replace(/_/g,' '))}
 /* Claude-style one-line labels: past tense + target, e.g. Searched "query" */
@@ -1072,6 +1588,41 @@ $("rowToolAccess").onclick=()=>{closeSheets();openSheet("contextSheet")}
 document.addEventListener("click",e=>{const card=e.target.closest("#openProjectCard");if(card)openProject()});
 $("modelBtn").onclick=()=>{openSheet("modelSheet");renderModels()}
 $("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;updateSearchUI();updateWorkspaceUI()}
+/* Console & extensions wiring */
+$("consoleBtn").onclick=openConsole;
+$("consoleClose").onclick=closeSheets;
+$("consoleClear").onclick=()=>{
+  if(CON.tab==="logs"){LOGBUF.length=0;renderLogs()}else{$("consoleOut").innerHTML=""}
+};
+document.querySelectorAll(".ctab").forEach(b=>b.onclick=()=>setConsoleTab(b.dataset.ctab));
+$("consoleInput").addEventListener("keydown",e=>{
+  const inp=e.target;
+  const hist=CON.hist[CON.tab];
+  if(e.key==="Enter"){
+    const v=inp.value;inp.value="";
+    if(CON.tab==="shell")runShellLine(v);else runJsLine(v);
+  }else if(e.key==="ArrowUp"){
+    if(!hist||!hist.length)return;
+    e.preventDefault();
+    if(CON.hi[CON.tab]<0)CON.hi[CON.tab]=hist.length;
+    CON.hi[CON.tab]=Math.max(0,CON.hi[CON.tab]-1);
+    inp.value=hist[CON.hi[CON.tab]]||"";
+  }else if(e.key==="ArrowDown"){
+    if(!hist||CON.hi[CON.tab]<0)return;
+    e.preventDefault();
+    CON.hi[CON.tab]=Math.min(hist.length,CON.hi[CON.tab]+1);
+    inp.value=hist[CON.hi[CON.tab]]||"";
+    if(CON.hi[CON.tab]>=hist.length)CON.hi[CON.tab]=-1;
+  }
+});
+$("extBtn").onclick=()=>{openSheet("extSheet");renderExtList()};
+$("extReload").onclick=async()=>{const b=$("extReload");b.disabled=true;await loadExtensions();b.disabled=false};
+$("extAddInline").onclick=()=>{
+  const ta=$("extInlineSrc");
+  if(!ta.value.trim())return;
+  state.extInline.push(ta.value);save();ta.value="";
+  loadExtensions();
+};
 function updateSearchUI(){
   const sel=$("searchProviderSel");if(!sel)return;
   sel.value=state.searchProvider;
@@ -1173,8 +1724,10 @@ $("saveContext").onclick=()=>{
 $("compactNow").onclick=()=>compactNow(true)
 $("sendBtn").onclick=send
 $("input").addEventListener("input",resizeInput)
+$("input").addEventListener("input",updateSlashMenu)
+$("input").addEventListener("keydown",e=>{if(e.key==="Escape"){$("slashMenu").classList.remove("show")}})
 $("input").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}})
-initProjectState();render();renderAttachments();resizeInput();updateModelBtn();renderRecent();
+initProjectState();render();renderAttachments();resizeInput();updateModelBtn();renderRecent();loadExtensions();
 
 /* ── Keyboard-aware scrolling ───────── */
 // The native WebView padding handles the layout resize; we only keep the chat
@@ -1189,7 +1742,7 @@ window.addEventListener("resize",syncKeyboard);
 // started inside an element that can actually scroll right now (chat feed,
 // sheets, code blocks, an overflowing textarea). Everything else — especially
 // the composer and its textarea — stays glued in place.
-const SCROLLABLE=".chat,.sheet,#recent,textarea,pre";
+const SCROLLABLE=".chat,.sheet,#recent,.console-out,textarea,pre";
 document.addEventListener("touchmove",e=>{
   let el=e.target;
   while(el&&el!==document.body){

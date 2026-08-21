@@ -356,8 +356,13 @@ class MainActivity : ComponentActivity() {
             try {
                 when (op) {
                     "list" -> {
+                        // Optional subpath (e.g. "extensions" inside the workspace)
+                        // lets JS enumerate a single folder instead of the whole tree.
+                        val start = if (path.isEmpty()) target
+                            else target.findFileRecursive(path)?.takeIf { it.isDirectory }
+                                ?: throw Exception("DIR_NOT_FOUND")
                         val names = mutableListOf<String>()
-                        walkFiles(target) { _, rel -> if (names.size < 500) names.add(rel) }
+                        walkFiles(start) { _, rel -> if (names.size < 500) names.add(rel) }
                         result = names.joinToString("\n").ifEmpty { "EMPTY_PROJECT" }
                     }
                     "read" -> {
@@ -521,7 +526,7 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
-        fun fsList(cb: String) { runFs("list", "", "", cb) }
+        fun fsList(path: String, cb: String) { runFs("list", path, "", cb) }
 
         @JavascriptInterface
         fun fsRead(path: String, cb: String) { runFs("read", path, "", cb) }

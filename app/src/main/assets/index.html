@@ -26,6 +26,8 @@
   <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M5 5v5m0 4v5m7-14v9m0 4v1m7-14v1m0 4v9"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="19" cy="8" r="2"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M6.5 7l1 12.5A1.5 1.5 0 0 0 9 21h6a1.5 1.5 0 0 0 1.5-1.5L17.5 7"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="M5 8l4 4-4 4"/><path d="M12 17h7"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><path d="M16.5 13.5v6M13.5 16.5h6"/></symbol>
 </svg>
 
 <div id="app">
@@ -35,6 +37,7 @@
       <span class="brand-logo"><svg><use href="#i-spark"/></svg></span>
       NightCode <em>PRO</em>
     </div>
+    <button class="icon-btn" id="consoleBtn" aria-label="Console"><svg><use href="#i-term"/></svg></button>
     <button class="icon-btn" id="moreBtn" aria-label="Settings"><svg><use href="#i-more"/></svg></button>
   </header>
 
@@ -102,8 +105,19 @@
     <button class="secondary" id="wsPick">Choose workspace folder</button>
     <button class="secondary" id="wsClear">Disconnect workspace</button>
     <div class="muted-label">Advanced</div>
+    <button class="sheet-row link" id="extBtn"><span class="row-ico"><svg><use href="#i-ext"/></svg></span>Extensions<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
     <button class="sheet-row link" id="contextBtn"><span class="row-ico"><svg><use href="#i-sliders"/></svg></span>Context &amp; memory<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
     <div id="settingsError" class="error"></div>
+  </div>
+
+  <div id="extSheet" class="sheet">
+    <div class="sheet-title">Extensions</div>
+    <div id="extList"></div>
+    <button class="secondary" id="extReload">Reload extensions</button>
+    <div class="muted-label">Quick add (saved on device)</div>
+    <textarea id="extInlineSrc" class="ext-inline-src" spellcheck="false" placeholder='nc.register({name:"demo",tools:[{name:"my_tool",description:"Example tool",schema:{type:"object",properties:{}},run:async()=>({result:"hi from extension",error:false})}],commands:{hi:(a,api)=>api.chat("hello!")}});'></textarea>
+    <button class="secondary" id="extAddInline">Load snippet</button>
+    <div class="ext-hint">Extension files load automatically from the permanent workspace folder <b>extensions/*.js</b> and from the project at <b>.nightcode/extensions/*.js</b>. They can add agent tools, slash commands and hooks — and run with full app access, so only add code you trust.</div>
   </div>
 
   <div id="modelSheet" class="sheet">
@@ -124,11 +138,28 @@
     <button class="secondary" id="compactNow">Compact context now</button>
   </div>
 
+  <div id="consoleSheet" class="sheet console-sheet">
+    <div class="console-tabs">
+      <button class="ctab active" data-ctab="shell">Shell</button>
+      <button class="ctab" data-ctab="js">JS</button>
+      <button class="ctab" data-ctab="logs">Logs</button>
+      <span class="console-info" id="consoleInfo"></span>
+      <button class="icon-btn" id="consoleClear" aria-label="Clear"><svg><use href="#i-trash"/></svg></button>
+      <button class="icon-btn" id="consoleClose" aria-label="Close"><svg><use href="#i-close"/></svg></button>
+    </div>
+    <div id="consoleOut" class="console-out"></div>
+    <div class="console-input-row" id="consoleRow">
+      <span id="consolePrompt" class="console-prompt">nc:/$</span>
+      <input id="consoleInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="help">
+    </div>
+  </div>
+
   <div id="sheetScrim" class="sheet-scrim"></div>
 
   <button id="scrollDownBtn" class="scroll-down-btn" aria-label="Scroll to bottom" onclick="scrollToBottom(true)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button>
 
   <div class="composer-wrap">
+    <div id="slashMenu" class="slash-menu"></div>
     <div id="attachments" class="attachments"></div>
     <div class="composer">
       <textarea id="input" rows="1" placeholder="Ask NightCode anything…"></textarea>

@@ -287,3 +287,53 @@ code.inline-code{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,
 .tool-file-badge svg{width:13px;height:13px;color:#8fa2ff}
 .tool-spinner{width:11px;height:11px;border:1.5px solid #3b4250;border-top-color:#7790ff;border-radius:50%;animation:ncspin .8s linear infinite}
 @keyframes ncspin{to{transform:rotate(360deg)}}
+
+/* ── Console (Shell / JS / Logs) ─────── */
+.sheet.console-sheet{height:86vh;max-height:none;display:flex;flex-direction:column;padding:10px 12px 12px;overflow:hidden}
+.console-tabs{display:flex;align-items:center;gap:4px;margin-bottom:8px;flex-shrink:0}
+.ctab{padding:7px 12px;border-radius:10px;font-size:12px;font-weight:600;color:var(--text-2);transition:background .15s,color .15s}
+.ctab.active{background:var(--surface-3);color:#fff}
+.console-info{margin-left:auto;font-size:10px;color:var(--text-3);max-width:28vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.console-tabs .icon-btn{width:32px;height:32px;border-radius:9px;flex:0 0 auto}
+.console-tabs .icon-btn svg{width:15px;height:15px}
+.console-out{flex:1;overflow-y:auto;overscroll-behavior:contain;background:#0a0c10;border:1px solid #1e222b;border-radius:12px;padding:10px 11px;font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;-webkit-overflow-scrolling:touch}
+.console-out::-webkit-scrollbar{width:0}
+.co-line{white-space:pre-wrap;overflow-wrap:anywhere;color:#b9c2d0;margin:0 0 1px}
+.co-cmd{color:#8ea0ff;margin-top:5px}
+.co-dir{color:#9ecbff}
+.co-ok{color:#7fd6a2}
+.co-err{color:#ff7279}
+.co-dim{color:#5e6674}
+.co-log.l-warn{color:#e8c97a}
+.co-log.l-error{color:#ff7279}
+.co-log.l-info{color:#9aa0ac}
+.console-input-row{display:flex;align-items:center;gap:8px;margin-top:8px;background:#0c0e12;border:1px solid var(--border-strong);border-radius:12px;padding:9px 12px;flex-shrink:0;transition:border-color .15s}
+.console-input-row:focus-within{border-color:rgba(124,140,255,.55)}
+.console-prompt{font:11.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#7fd6a2;white-space:nowrap}
+.console-input-row input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);font:12.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.console-input-row input::placeholder{color:var(--text-3)}
+
+/* ── Slash command menu ──────────────── */
+.slash-menu{position:absolute;left:0;right:0;bottom:calc(100% + 6px);z-index:11;background:#12141a;border:1px solid var(--border-strong);border-radius:16px;box-shadow:0 14px 44px rgba(0,0,0,.55);opacity:0;pointer-events:none;transform:translateY(6px);transition:opacity .16s,transform .16s;max-height:236px;overflow-y:auto}
+.slash-menu::-webkit-scrollbar{width:0}
+.slash-menu.show{opacity:1;pointer-events:auto;transform:none}
+.slash-item{display:flex;align-items:baseline;gap:10px;width:100%;padding:10px 14px;text-align:left}
+.slash-item:active{background:var(--surface-2)}
+.slash-item b{font:12.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#a9b6ff;white-space:nowrap}
+.slash-item small{font-size:11px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── Extensions manager ──────────────── */
+.ext-row{display:flex;align-items:center;gap:10px;padding:11px 4px;border-top:1px solid var(--border)}
+.ext-row.err .ext-name{color:var(--danger)}
+.ext-main{flex:1;min-width:0}
+.ext-name{font-size:13px;font-weight:600}
+.ext-name small{color:var(--text-3);font-weight:400;margin-left:5px}
+.ext-meta{font-size:10.5px;color:var(--text-3);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ext-toggle{display:grid;place-items:center;flex:0 0 auto}
+.ext-toggle input{width:20px;height:20px;accent-color:var(--accent)}
+.ext-del{color:var(--text-3);font-size:10.5px;flex:0 0 auto;padding:4px}
+.ext-empty{color:var(--text-3);font-size:12px;text-align:center;padding:20px 10px;line-height:1.6}
+.ext-hint{font-size:10.5px;color:var(--text-3);line-height:1.6;padding-top:10px}
+.ext-hint b{color:var(--text-2)}
+.ext-inline-src{width:100%;min-height:90px;max-height:220px;background:#0c0e12;border:1px solid var(--border-strong);border-radius:12px;padding:10px;color:var(--text);font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;outline:0;resize:vertical;margin-top:6px}
+.ext-inline-src:focus{border-color:rgba(124,140,255,.55)}
