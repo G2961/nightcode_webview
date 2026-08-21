@@ -553,6 +553,16 @@ async function ollamaApi(path,payload){
   console.log("[NightCode] Ollama "+path+" "+JSON.stringify({status:r.status,error:r.error,bodyStart:(r.body||"").slice(0,300)}));
   return r;
 }
+/* Quick key check: a 1-result search. Called when the user saves the key. */
+async function verifyOllamaKey(){
+  const note=$("searchNote");
+  if(!state.ollamaKey){if(note)note.textContent="No key set — using free search";return}
+  if(note)note.textContent="Checking key…";
+  const r=await ollamaApi("web_search",{query:"test",max_results:1});
+  if(!r.error&&r.status>=200&&r.status<300){if(note)note.textContent="Key OK ✓"}
+  else if(r.status===401||r.status===403){if(note)note.textContent="Key invalid (401/403) — check ollama.com/settings/keys"}
+  else{if(note)note.textContent="Key check failed (status "+r.status+")"}
+}
 async function searchOllama(q){
   const r=await ollamaApi("web_search",{query:q,max_results:8});
   if(r.error||r.status<200||r.status>=300)return null;
@@ -561,6 +571,18 @@ async function searchOllama(q){
     const out=(d.results||[]).map((x,i)=>(i+1)+". "+(x.title||"")+(x.url?"\n   URL: "+x.url:"")+(x.content?"\n   "+String(x.content).replace(/\s+/g," ").trim():""));
     return out.length?out.join("\n\n").slice(0,6000):null;
   }catch(e){return null}
+}
+/* Heuristic: Bing RSS pads thin/irrelevant queries with unrelated sponsored noise
+   (calculators, e-commerce). If query terms barely appear in the results, the
+   result set is garbage — say so instead of feeding the model junk. */
+function resultsRelevant(q,resultsText){
+  const norm=s=>String(s||"").toLowerCase().replace(/ё/g,"е");
+  const terms=norm(q).split(/[\s\"«»'’`?!,.()]+/).filter(t=>t.length>2);
+  if(!terms.length)return true;
+  const hay=norm(resultsText);
+  let hits=0;
+  for(const t of terms)if(hay.includes(t))hits++;
+  return hits>=Math.max(1,Math.ceil(terms.length*0.4));
 }
 async function fetchOllama(url){
   const r=await ollamaApi("web_fetch",{url});
@@ -619,8 +641,8 @@ async function runWebSearch(query){
       if(g)return {result:g,error:false};
     }
     const b=await searchBing(q);
-    if(b)return {result:b,error:false};
-    // If Bing looked thin, news results may still exist in Google News.
+    if(b&&resultsRelevant(q,b))return {result:b,error:false};
+    console.log("[NightCode] Bing results irrelevant for query, falling through");
     if(!news){
       const g=await searchGoogleNews(q);
       if(g)return {result:g,error:false};
@@ -778,7 +800,7 @@ function updateSearchUI(){
   $("searchNote").textContent=keyOk?"On: Ollama search + web fetch tools":"Off: free search (Bing/Google News)";
 }
 $("searchOllamaChk").onchange=e=>{state.searchOllama=e.target.checked;save();updateSearchUI()}
-$("ollamaKeyInput").addEventListener("change",e=>{state.ollamaKey=e.target.value.trim();save();updateSearchUI()})
+$("ollamaKeyInput").addEventListener("change",e=>{state.ollamaKey=e.target.value.trim();save();verifyOllamaKey()})
 $("wsEnabled").onchange=e=>{state.wsEnabled=e.target.checked;save();updateWorkspaceUI()}
 $("wsPick").onclick=()=>{if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();else alert("Available in the Android app.")}
 $("wsClear").onclick=()=>{if(window.Android&&Android.clearWorkspace){Android.clearWorkspace()}state.wsEnabled=false;save();updateWorkspaceUI()}
