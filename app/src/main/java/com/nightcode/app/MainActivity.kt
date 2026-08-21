@@ -537,6 +537,15 @@ class MainActivity : ComponentActivity() {
                         val hdrs = org.json.JSONObject(headersJson)
                         for (key in hdrs.keys()) conn.setRequestProperty(key, hdrs.getString(key))
                     } catch (_: Exception) {}
+                    // Cloudflare-protected hosts (ollama.com etc.) reject the default
+                    // Dalvik User-Agent with 403. Always send a browser UA unless the
+                    // caller set one explicitly.
+                    if (conn.getRequestProperty("User-Agent").isNullOrEmpty()) {
+                        conn.setRequestProperty(
+                            "User-Agent",
+                            "Mozilla/5.0 (Android 14; Mobile) Gecko/537.36 Chrome/127.0.0.0 Mobile Safari/537.36"
+                        )
+                    }
                     // Keep the transport simple: no transparent gzip to decode.
                     if (conn.getRequestProperty("Accept-Encoding") == null) {
                         conn.setRequestProperty("Accept-Encoding", "identity")

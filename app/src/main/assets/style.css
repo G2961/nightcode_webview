@@ -185,6 +185,8 @@ textarea::placeholder{color:var(--text-3)}
 .sheet input{display:block;width:100%;margin-top:6px;background:#0c0e12;border:1px solid var(--border-strong);border-radius:13px;padding:12px 13px;outline:0;color:var(--text);font-size:13.5px;transition:border-color .15s,box-shadow .15s}
 .sheet input:focus{border-color:rgba(124,140,255,.55);box-shadow:0 0 0 3px rgba(124,140,255,.1)}
 .sheet select{display:block;width:100%;margin-top:6px;background:#0c0e12;border:1px solid var(--border-strong);border-radius:13px;padding:12px 13px;outline:0;color:var(--text);font-size:13.5px}
+.row-btns{display:flex;gap:8px;margin-top:8px}
+.row-btns .secondary{flex:1;margin:0}
 /* Claude-style compact one-liners: slim rows, no card chrome */
 .tool-activity.compact{width:100%;max-width:94%;border:0;background:transparent;box-shadow:none;border-radius:10px;margin:2px 0;overflow:visible}
 .tool-activity.compact .tool-activity-head{min-height:30px;padding:3px 8px;border-bottom:0;border-radius:8px;cursor:pointer}

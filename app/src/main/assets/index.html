@@ -91,7 +91,10 @@
       </select>
     </label>
     <label>Ollama API key<input id="ollamaKeyInput" type="password" placeholder="ollama.com/settings/keys"></label>
-    <button class="secondary" id="verifyOllamaBtn">Check key</button>
+    <div class="row-btns">
+      <button class="secondary" id="saveKeyBtn">OK</button>
+      <button class="secondary" id="verifyOllamaBtn">Check key</button>
+    </div>
     <div class="key-status" id="keyStatus">Free search (Bing / Google News)</div>
     <div class="muted-label">Workspace</div>
     <div id="workspaceStatus" class="workspace-status"></div>

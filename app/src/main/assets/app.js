@@ -851,6 +851,16 @@ $("ollamaKeyInput").addEventListener("input",e=>{
 $("ollamaKeyInput").addEventListener("change",e=>{
   if(state.ollamaKey)verifyOllamaKey();else updateSearchUI();
 });
+$("saveKeyBtn").onclick=()=>{
+  // Save only — no network check. For when the tester/API is flaky.
+  state.ollamaKey=$("ollamaKeyInput").value.trim();save();
+  state._ollamaVerified=false;
+  const st=$("keyStatus");
+  if(st){
+    st.className="key-status ok";
+    st.textContent=state.ollamaKey?"Key saved ✓":(state.searchProvider==="free"?"Free search (Bing / Google News)":"No key — free search");
+  }
+};
 $("verifyOllamaBtn").onclick=verifyOllamaKey;
 $("wsEnabled").onchange=e=>{state.wsEnabled=e.target.checked;save();updateWorkspaceUI()}
 $("wsPick").onclick=()=>{if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();else alert("Available in the Android app.")}
