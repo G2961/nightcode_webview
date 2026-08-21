@@ -479,7 +479,10 @@ async function send(){
       showTyping();
     }
     removeTyping();
-    addMessage("assistant",final.trim()||"(empty response)",[]);
+    // When the model burns its whole budget on thinking and returns no text,
+    // surface an honest explanation instead of a dead "(empty response)" bubble.
+    const finalText=final.trim()||"Модель не дала текстового ответа — возможно, лимит токенов исчерпан на размышления или тулах. Попробуй ещё раз или упрости запрос.";
+    addMessage("assistant",finalText,[]);
     const last=state.messages[state.messages.length-1];
     last.reasoning=Date.now()-started;
     if(allThinking.trim())last.thinking=allThinking.trim();
@@ -667,10 +670,54 @@ async function runWebSearch(query){
 async function runTool(name,input){
   if(name==="web_search")return runWebSearch(input.query);
   if(name==="web_fetch"){
-    if(state.searchProvider!=="free"&&state.ollamaKey)return fetchOllama(String(input.url||"").replace(/^\/+/,""));
-    // No Ollama key: fetch raw HTML natively and strip tags.
-    const url=String(input.url||"");
-    if(!/^https?:\/\//.test(url))return {result:"INVALID_URL (needs http/https)",error:true};
+    let url=String(input.url||"").trim();
+    if(!/^https?:\/\//i.test(url))url="https://"+url.replace(/^\/+/,"");
+    // MediaWiki sites (Fandom, Wikipedia, Miraheze): use the official API instead
+    // of scraping HTML — ?action=raw redirects to 404 on Fandom, but api.php
+    // serves clean wikitext. If the URL points at a /wiki/ page, parse it;
+    // otherwise treat the query as a search across the wiki.
+    try{
+      const u=new URL(url);
+      if(/(^|\.)fandom\.com$/.test(u.hostname)||/(^|\.)wikipedia\.org$/.test(u.hostname)||/(^|\.)miraheze\.org$/.test(u.hostname)){
+        const api=u.origin+"/api.php";
+        const wikiTitle=u.pathname.startsWith("/wiki/")?decodeURIComponent(u.pathname.slice(6)):"";
+        if(wikiTitle){
+          const pr=await httpFetch("GET",api+"?action=parse&page="+encodeURIComponent(wikiTitle)+"&prop=wikitext&format=json",{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Chrome/127"});
+          if(!pr.error&&pr.body){
+            try{
+              const d=JSON.parse(pr.body);
+              if(d.parse&&d.parse.wikitext){
+                return {result:("URL: "+url+"\n\n"+d.parse.wikitext["*"]).slice(0,12000),error:false};
+              }
+              if(d.error&&d.error.code==="missingtitle"){
+                return {result:"PAGE_NOT_FOUND: "+wikiTitle+" doesn't exist on this wiki. Search the wiki instead.",error:true};
+              }
+            }catch(e){}
+          }
+        }
+        // Search the wiki by hostname prefix (e.g. geometry-dash-fan.fandom.com G2961)
+        const mQuery=wikiTitle||u.searchParams.get("q")||"";
+        const term=mQuery.split(/\s+/).filter(w=>!/fandom|wikipedia|miraheze|wiki|https?/i.test(w)).join(" ").trim();
+        if(term){
+          const sr=await httpFetch("GET",api+"?action=query&list=search&srsearch="+encodeURIComponent(term)+"&srlimit=8&format=json",{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Chrome/127"});
+          if(!sr.error&&sr.body){
+            try{
+              const d=JSON.parse(sr.body);
+              const hits=(d.query&&d.query.search)||[];
+              if(hits.length){
+                const lines=hits.map((h,i)=>(i+1)+". "+h.title+(h.wordcount?" ("+h.wordcount+" words)":"")+"\n   "+u.origin+"/wiki/"+encodeURIComponent(h.title));
+                return {result:("WIKI SEARCH: "+term+"\n\n"+lines.join("\n")+"\n\nUse web_fetch on any /wiki/ URL to read the article.").slice(0,6000),error:false};
+              }
+            }catch(e){}
+          }
+        }
+      }
+    }catch(e){}
+    if(state.searchProvider!=="free"&&state.ollamaKey){
+      const of=await fetchOllama(url);
+      if(!of.error)return of;
+    }
+    // Last resort: fetch raw HTML natively and strip tags.
     const r=await httpFetch("GET",url,{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Gecko/537.36 Chrome/127.0.0.0 Mobile Safari/537.36","Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8","Accept-Language":"ru-RU,ru;q=0.9,en;q=0.8"});
     if(r.error||r.status<200||r.status>=300)return {result:"FETCH_FAILED: "+r.body.slice(0,200),error:true};
     const text=r.body
