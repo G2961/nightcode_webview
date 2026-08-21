@@ -521,16 +521,27 @@ async function send(){
           if(ev.type==="content_block_start"&&ev.content_block&&ev.content_block.type==="tool_use"){
             if(tt)tt.textContent="Running tool: "+(ev.content_block.name||"");
           }
-        }catch(e){}
+      }catch(e){console.log("[NightCode] chunk handler error "+String(e&&e.message||e))}
       }));
       if(r.error)throw Error("Network: "+String(r.errMsg||"").slice(0,1000));
       if(r.status<200||r.status>=300){
+        console.log("[NightCode] stream failed after retries "+JSON.stringify({status:r.status,errMsg:String(r.errMsg||"").slice(0,500),finalLen:final.length,thinkingLen:allThinking.length}));
+        // Keep whatever streamed in: show partial thinking instead of dropping it.
+        if(final||allThinking){
+          hideLiveCard();
+          const partial=final.trim();
+          addMessage("assistant",partial||"⚠️ Поток оборвался после размышлений (HTTP "+r.status+"). Попробуй ещё раз.",[]);
+          const lm=state.messages[state.messages.length-1];
+          if(allThinking)lm.thinking=allThinking;
+          lm.reasoning=Date.now()-started;save();render();
+          return;
+        }
         hideLiveCard();
         throw Error("HTTP "+r.status+": streaming failed after retries");
       }
-      hideLiveCard();
       // After the stream we need the final structured content (tool_use blocks with
       // ids): re-request non-streaming once, cheap because the provider caches it.
+      // The live card stays visible until this succeeds — no flicker on retry.
       const r2=await withRetry(()=>httpFetch("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify({...body,stream:false})));
       if(r2.error)throw Error("Network: "+r2.body.slice(0,1000));
       if(r2.status<200||r2.status>=300)throw Error(r2.body.slice(0,1000));
@@ -542,6 +553,7 @@ async function send(){
         bodyLength:txt.length,bodyPreview:txt.slice(0,2000)
       }));
       const data2=JSON.parse(txt);
+      hideLiveCard();
       const content=data2.content||[];
       const toolUses=content.filter(x=>x.type==="tool_use");
       // Hidden reasoning arrives in different shapes depending on the backend:
@@ -590,8 +602,18 @@ async function send(){
     save();render();
   }catch(e){
     removeTyping();
+    _hideLiveCardFn&&_hideLiveCardFn();
     console.error("[NightCode] send failed "+JSON.stringify({name:e&&e.name,message:String(e&&e.message||e).slice(0,1500),stack:String(e&&e.stack||"").slice(0,800)}));
-    addMessage("assistant","Error: "+(e.message||e));
+    // If the model streamed any thinking/text before dying, keep it visible
+    // instead of letting it vanish with the live card.
+    if(typeof allThinking!=='undefined'&&allThinking||typeof final!=='undefined'&&final.trim()){
+      addMessage("assistant",(final&&final.trim())||"⚠️ "+(e.message||e),[]);
+      const lm=state.messages[state.messages.length-1];
+      if(typeof allThinking!=='undefined'&&allThinking)lm.thinking=allThinking;
+      lm.reasoning=Date.now()-started;save();render();
+    }else{
+      addMessage("assistant","Error: "+(e.message||e));
+    }
   }
   finally{$("sendBtn").disabled=false;hideLiveCardSafe()}
 }
