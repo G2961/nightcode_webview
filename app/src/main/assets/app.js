@@ -539,6 +539,19 @@ async function send(){
       +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
     let final="";const toolCalls=[];let allThinking="";
     let liveCard=null;
+    // Live answer bubble: text tokens render in place as they stream, so the
+    // answer appears WHILE the model works — not as one lump at the very end.
+    let liveBubble=null,liveBubbleText=null;
+    const ensureLiveBubble=()=>{
+      if(liveBubble)return;
+      const chat=$("chat");
+      const wrap=document.createElement("div");wrap.className="message assistant";
+      wrap.innerHTML='<div class="bubble"><span id="liveText"></span><span class="stream-caret"></span></div>';
+      chat.appendChild(wrap);
+      liveBubble=wrap;liveBubbleText=document.getElementById("liveText");
+      autoScroll();
+    };
+    const hideLiveBubble=()=>{if(liveBubble){liveBubble.remove();liveBubble=null;liveBubbleText=null}};
     const ensureLiveCard=()=>{
       if(liveCard)return;
       removeTyping();
@@ -553,7 +566,7 @@ async function send(){
       autoScroll();
     };
     const hideLiveCard=()=>{if(liveCard){liveCard.closest(".message").remove();liveCard=null}};
-    _hideLiveCardFn=hideLiveCard;
+    _hideLiveCardFn=()=>{hideLiveCard();hideLiveBubble()};
     for(let turn=0;turn<8;turn++){
       const lim=getCtxLimits();
       const body={model:state.selected,max_tokens:Number(lim.output)||6000,system,messages,stream:true};
@@ -586,7 +599,7 @@ async function send(){
               if(tb){tb.textContent=allThinking.slice(-3000);tb.scrollTop=tb.scrollHeight}
               autoScroll();
             }
-            if(d.text){final+=d.text;if(tt)tt.textContent="Writing…";autoScroll()}
+            if(d.text){ensureLiveCard();if(tt)tt.textContent="Writing…";ensureLiveBubble();if(liveBubbleText){liveBubbleText.textContent+=d.text;if(liveBubbleText.textContent.length>4000)liveBubbleText.textContent=liveBubbleText.textContent.slice(-4000)}autoScroll()}
             if(d.partial_json&&blocks[ev.index])blocks[ev.index].inputJson+=d.partial_json;
           }
           if(ev.type==="message_delta"&&ev.delta&&ev.delta.stop_reason)stopReason=ev.delta.stop_reason;
@@ -650,6 +663,7 @@ async function send(){
       messages.push({role:"assistant",content});
       const results=[];
       for(const u of toolUses){
+        hideLiveBubble();
         const activity=showToolActivity(u.name,u.input||{});
         let out,err=false;
         try{
@@ -664,6 +678,7 @@ async function send(){
       showTyping();
     }
     removeTyping();
+    hideLiveBubble();
     // When the model burns its whole budget on thinking and returns no text,
     // surface an honest explanation instead of a dead "(empty response)" bubble.
     const finalText=final.trim()||"Модель не дала текстового ответа — возможно, лимит токенов исчерпан на размышления или тулах. Попробуй ещё раз или упрости запрос.";
