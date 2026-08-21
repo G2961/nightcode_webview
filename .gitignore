@@ -8,3 +8,10 @@ ui_dump.xml
 ui.xml
 screen.png
 dom.xml
+*.json.tmp
+api2.json
+api_test.json
+fandom_*.html
+raw_test.txt
+salt.json
+ollama_test.json

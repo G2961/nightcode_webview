@@ -191,6 +191,52 @@ window.__httpResult=function(cbId,status,body,error){
   delete httpCbs[cbId];
   cb({status,body,error:!!error});
 };
+/* ── Streaming client (SSE via native bridge) ── */
+const streamCbs={};let streamCbId=0;
+window.__streamChunk=function(cbId,data){
+  const cb=streamCbs[cbId];if(cb&&cb.onChunk)cb.onChunk(data);
+};
+window.__streamDone=function(cbId,status,errMsg,error){
+  const cb=streamCbs[cbId];if(!cb)return;
+  delete streamCbs[cbId];
+  cb.onDone({status,errMsg,error:!!error});
+};
+function httpStream(method,url,headers={},body="",onChunk){
+  return new Promise(resolve=>{
+    if(!window.Android||!Android.httpStream){
+      // Browser fallback: plain fetch (no SSE in dev browser).
+      fetch(url,{method,headers,body:body||undefined})
+        .then(async r=>{
+          const t=await r.text();
+          for(const line of t.split("\n"))if(line.startsWith("data:"))onChunk(line.slice(5).trim());
+          resolve({status:r.status,errMsg:"",error:false});
+        })
+        .catch(e=>resolve({status:0,errMsg:String(e&&e.message||e),error:true}));
+      return;
+    }
+    const cbId="st"+(++streamCbId);
+    streamCbs[cbId]={onChunk,onDone:resolve};
+    try{Android.httpStream(method,url,JSON.stringify(headers),body,cbId)}
+    catch(e){delete streamCbs[cbId];resolve({status:0,errMsg:String(e&&e.message||e),error:true})}
+  });
+}
+/* Retries with exponential backoff: 1s, 2s, 4s — for 5xx and network errors. */
+async function withRetry(fn,attempts=3){
+  let lastErr=null;
+  for(let i=0;i<attempts;i++){
+    try{
+      const r=await fn();
+      if(r&&r.error===false&&r.status>=200&&r.status<500)return r;
+      lastErr=r;
+    }catch(e){lastErr={status:0,errMsg:String(e&&e.message||e),error:true,body:String(e&&e.message||e)}}
+    if(i<attempts-1){
+      const wait=1000*Math.pow(2,i);
+      console.log("[NightCode] retry "+(i+2)+"/"+attempts+" in "+wait+"ms (status="+(lastErr&&lastErr.status)+")");
+      await new Promise(res=>setTimeout(res,wait));
+    }
+  }
+  return lastErr;
+}
 function httpFetch(method,url,headers={},body){
   return new Promise(resolve=>{
     if(!window.Android||!Android.httpRequest){
@@ -439,27 +485,64 @@ async function send(){
       :"You are NightCode, a helpful AI assistant. There is no project folder connected, so do not assume access to local files. You have the web_search tool — use it whenever the question benefits from current information (documentation, news, library APIs, recent releases) and cite source URLs in your answer.")
       +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
     let final="";const toolCalls=[];let allThinking="";
+    let liveCard=null;
+    const ensureLiveCard=()=>{
+      if(liveCard)return;
+      removeTyping();
+      const chat=$("chat");
+      liveCard=document.createElement("details");
+      liveCard.className="tool-activity compact";
+      liveCard.open=true;
+      liveCard.innerHTML='<summary class="tool-activity-head"><div class="tool-activity-icon sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4.5 4.5 0 0 0-4.5 4.5c0 .7.2 1.4.5 2A4 4 0 0 0 5 13.5 4 4 0 0 0 9 17.5h.5A3.5 3.5 0 0 0 12 20a3.5 3.5 0 0 0 2.5-2.5H15a4 4 0 0 0 4-4 4 4 0 0 0-3-3.8c.3-.6.5-1.3.5-2A4.5 4.5 0 0 0 12 3z"/></svg></div><div class="tool-activity-text"><div class="tool-activity-title" id="liveTitle">Thinking…</div></div><div class="tool-activity-status"><span class="tool-spinner"></span></div></summary><div class="tool-preview"><pre id="liveBody"></pre></div>';
+      const wrap=document.createElement("div");wrap.className="message assistant";
+      wrap.appendChild(liveCard);
+      chat.appendChild(wrap);
+      chat.scrollTop=chat.scrollHeight;
+    };
+    const hideLiveCard=()=>{if(liveCard){liveCard.closest(".message").remove();liveCard=null}};
+    _hideLiveCardFn=hideLiveCard;
     for(let turn=0;turn<8;turn++){
       const lim=getCtxLimits();
-      const body={model:state.selected,max_tokens:Number(lim.output)||6000,system,messages};
+      const body={model:state.selected,max_tokens:Number(lim.output)||6000,system,messages,stream:true};
       // Web tools always available; file tools only with a connected project.
       const webTools=(state.searchProvider!=="free"&&state.ollamaKey)?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
       body.tools=proj?[...FILE_TOOLS,...webTools]:webTools;
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
-      let r;
-      r=await httpFetch("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify(body));
-      if(r.error)throw Error("Network: "+r.body.slice(0,1000));
-      const txt=r.body;
+      let data=null;
+      ensureLiveCard();
+      const r=await withRetry(()=>httpStream("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify(body),chunk=>{
+        try{
+          const ev=JSON.parse(chunk);
+          const tb=document.getElementById("liveBody"),tt=document.getElementById("liveTitle");
+          if(ev.type==="content_block_delta"){
+            if(ev.delta&&ev.delta.thinking){ensureLiveCard();allThinking+=ev.delta.thinking;if(tb){tb.textContent=allThinking.slice(-3000);tb.scrollTop=tb.scrollHeight}}
+            if(ev.delta&&ev.delta.text){ensureLiveCard();final+=(final?"":"")+ev.delta.text;if(tt)tt.textContent="Writing…"}
+          }
+          if(ev.type==="content_block_start"&&ev.content_block&&ev.content_block.type==="tool_use"){
+            if(tt)tt.textContent="Running tool: "+(ev.content_block.name||"");
+          }
+        }catch(e){}
+      }));
+      if(r.error)throw Error("Network: "+String(r.errMsg||"").slice(0,1000));
+      if(r.status<200||r.status>=300){
+        hideLiveCard();
+        throw Error("HTTP "+r.status+": streaming failed after retries");
+      }
+      hideLiveCard();
+      // After the stream we need the final structured content (tool_use blocks with
+      // ids): re-request non-streaming once, cheap because the provider caches it.
+      const r2=await withRetry(()=>httpFetch("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify({...body,stream:false})));
+      if(r2.error)throw Error("Network: "+r2.body.slice(0,1000));
+      if(r2.status<200||r2.status>=300)throw Error(r2.body.slice(0,1000));
+      const txt=r2.body;
       console.log("[NightCode] /v1/messages response "+JSON.stringify({
         url:reqUrl,model:state.selected,modelInBody:body.model,
-        status:r.status,statusText:"",
+        status:r2.status,statusText:"",
         contentType:"",
         bodyLength:txt.length,bodyPreview:txt.slice(0,2000)
       }));
-      if(r.status<200||r.status>=300)throw Error(txt.slice(0,1000));
-      const data=JSON.parse(txt);
-      console.log("[NightCode] response content blocks "+JSON.stringify((data.content||[]).map(x=>({type:x.type,hasText:!!x.text,hasThinking:!!(x.thinking||x.reasoning_content)}))));
-      const content=data.content||[];
+      const data2=JSON.parse(txt);
+      const content=data2.content||[];
       const toolUses=content.filter(x=>x.type==="tool_use");
       // Hidden reasoning arrives in different shapes depending on the backend:
       // Anthropic-style content blocks of type "thinking", or OpenAI-style
@@ -510,8 +593,10 @@ async function send(){
     console.error("[NightCode] send failed "+JSON.stringify({name:e&&e.name,message:String(e&&e.message||e).slice(0,1500),stack:String(e&&e.stack||"").slice(0,800)}));
     addMessage("assistant","Error: "+(e.message||e));
   }
-  finally{$("sendBtn").disabled=false}
+  finally{$("sendBtn").disabled=false;hideLiveCardSafe()}
 }
+let _hideLiveCardFn=null;
+function hideLiveCardSafe(){if(_hideLiveCardFn)_hideLiveCardFn()}
 function compactIfNeeded(){
   if(!state.settings.auto)return;
   const lim=getCtxLimits();

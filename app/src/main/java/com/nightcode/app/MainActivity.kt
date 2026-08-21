@@ -508,6 +508,55 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun fsDelete(path: String, cb: String) { runFs("delete", path, "", cb) }
 
+        /**
+         * Streaming SSE variant: reads text/event-stream line by line and forwards
+         * each data: payload to window.__streamChunk(cbId, data). Ends with
+         * window.__streamDone(cbId, status, error).
+         */
+        @JavascriptInterface
+        fun httpStream(method: String, url: String, headersJson: String, body: String, cb: String) {
+            Thread {
+                var code = 0
+                var error = false
+                var errMsg = ""
+                try {
+                    val conn = URL(url).openConnection() as HttpURLConnection
+                    conn.requestMethod = method.uppercase()
+                    conn.connectTimeout = 30000
+                    conn.readTimeout = 600000
+                    try {
+                        val hdrs = org.json.JSONObject(headersJson)
+                        for (key in hdrs.keys()) conn.setRequestProperty(key, hdrs.getString(key))
+                    } catch (_: Exception) {}
+                    if (conn.getRequestProperty("User-Agent").isNullOrEmpty()) {
+                        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android 14; Mobile) Gecko/537.36 Chrome/127.0.0.0 Mobile Safari/537.36")
+                    }
+                    if (body.isNotEmpty()) {
+                        conn.doOutput = true
+                        val bytes = body.toByteArray(Charsets.UTF_8)
+                        conn.setFixedLengthStreamingMode(bytes.size)
+                        conn.outputStream.use { it.write(bytes) }
+                    }
+                    code = conn.responseCode
+                    if (code in 200..399) {
+                        val reader = java.io.BufferedReader(java.io.InputStreamReader(conn.inputStream, Charsets.UTF_8))
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            if (line.isEmpty() || !line.startsWith("data:")) continue
+                            val data = line.substring(5).trim()
+                            js("window.__streamChunk && window.__streamChunk(${jsonString(cb)}, ${jsonString(data)})")
+                        }
+                    } else {
+                        errMsg = conn.errorStream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+                    }
+                } catch (e: Exception) {
+                    errMsg = e.message ?: e.toString()
+                    error = true
+                }
+                js("window.__streamDone && window.__streamDone(${jsonString(cb)}, $code, ${jsonString(errMsg)}, $error)")
+            }.start()
+        }
+
         @JavascriptInterface
         fun openUrl(url: String) {
             if (url.startsWith("https://") || url.startsWith("http://")) {
