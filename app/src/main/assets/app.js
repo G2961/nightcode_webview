@@ -10,6 +10,8 @@ const state={
   attachments:[],
   projectName:"",
   wsEnabled:localStorage.getItem("wsEnabled")==="1",
+  searchOllama:localStorage.getItem("searchOllama")==="1",
+  ollamaKey:localStorage.getItem("ollamaKey")||"",
   sessions:JSON.parse(localStorage.getItem("sessions")||"[]"),
   projects:JSON.parse(localStorage.getItem("projects")||"[]")
 };
@@ -37,6 +39,8 @@ function save(){
   localStorage.setItem("summary",state.summary);
   localStorage.setItem("settings",JSON.stringify(state.settings));
   localStorage.setItem("wsEnabled",state.wsEnabled?"1":"0");
+  localStorage.setItem("searchOllama",state.searchOllama?"1":"0");
+  localStorage.setItem("ollamaKey",state.ollamaKey);
   localStorage.setItem("sessions",JSON.stringify(state.sessions));
   localStorage.setItem("projects",JSON.stringify(state.projects));
 }
@@ -416,8 +420,9 @@ async function send(){
     let final="";const toolCalls=[];let allThinking="";
     for(let turn=0;turn<8;turn++){
       const body={model:state.selected,max_tokens:Number(state.settings.output)||6000,system,messages};
-      // Web search works everywhere; file tools only with a connected project.
-      body.tools=proj?[...FILE_TOOLS,WEB_SEARCH_TOOL]:[WEB_SEARCH_TOOL];
+      // Web tools always available; file tools only with a connected project.
+      const webTools=state.searchOllama&&state.ollamaKey?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
+      body.tools=proj?[...FILE_TOOLS,...webTools]:webTools;
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
       let r;
       r=await httpFetch("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify(body));
@@ -531,6 +536,7 @@ const FILE_TOOLS=[
   {name:"delete_file",description:"Delete a file from the project. Only use when the user explicitly asks for deletion.",input_schema:{type:"object",properties:{path:{type:"string"}},required:["path"]}}
 ];
 const WEB_SEARCH_TOOL={name:"web_search",description:"Search the web for current information: documentation, recent events, library APIs, error messages. Returns titles, snippets and URLs.",input_schema:{type:"object",properties:{query:{type:"string",description:"Search query"}},required:["query"]}};
+const WEB_FETCH_TOOL={name:"web_fetch",description:"Fetch a web page by URL and return its main text content. Use after web_search to read a promising result in full before answering.",input_schema:{type:"object",properties:{url:{type:"string",description:"Full URL including https://"}},required:["url"]}};
 
 /* Web search router: news-type queries go to Google News RSS (excellent Russian
    coverage, machine-readable), everything else to Bing RSS (stable, no captcha).
@@ -538,6 +544,32 @@ const WEB_SEARCH_TOOL={name:"web_search",description:"Search the web for current
    last-resort fallback. */
 function isNewsQuery(q){
   return /новост|событ|сегодня|свеж|последн|latest|news|today|this week|breaking|войн|выбор|election|war/i.test(q);
+}
+/* ── Ollama web search/fetch (https://docs.ollama.com/web-search) ── */
+async function ollamaApi(path,payload){
+  const key=state.ollamaKey;
+  if(!key)return {error:true,body:"No Ollama API key set (Settings → Web search)"};
+  const r=await httpFetch("POST","https://ollama.com/api/"+path,{"Authorization":"Bearer "+key,"content-type":"application/json"},JSON.stringify(payload));
+  console.log("[NightCode] Ollama "+path+" "+JSON.stringify({status:r.status,error:r.error,bodyStart:(r.body||"").slice(0,300)}));
+  return r;
+}
+async function searchOllama(q){
+  const r=await ollamaApi("web_search",{query:q,max_results:8});
+  if(r.error||r.status<200||r.status>=300)return null;
+  try{
+    const d=JSON.parse(r.body);
+    const out=(d.results||[]).map((x,i)=>(i+1)+". "+(x.title||"")+(x.url?"\n   URL: "+x.url:"")+(x.content?"\n   "+String(x.content).replace(/\s+/g," ").trim():""));
+    return out.length?out.join("\n\n").slice(0,6000):null;
+  }catch(e){return null}
+}
+async function fetchOllama(url){
+  const r=await ollamaApi("web_fetch",{url});
+  if(r.error||r.status<200||r.status>=300)return {result:"FETCH_FAILED: "+r.body.slice(0,200),error:true};
+  try{
+    const d=JSON.parse(r.body);
+    const text=(d.title?"# "+d.title+"\n\n":"")+(d.content||"");
+    return {result:text.slice(0,12000)||"(empty page)",error:false};
+  }catch(e){return {result:"FETCH_FAILED: bad response",error:true}}
 }
 async function searchGoogleNews(q){
   const strip=s=>String(s).replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#x27;|&#39;/g,"'").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/\s+/g," ").trim();
@@ -575,6 +607,11 @@ async function searchBing(q){
 async function runWebSearch(query){
   const q=String(query||"").trim();
   if(!q)return {result:"EMPTY_QUERY",error:true};
+  // Preferred provider: Ollama (if key set) — real search index, quality results.
+  if(state.searchOllama&&state.ollamaKey){
+    const o=await searchOllama(q);
+    if(o)return {result:o,error:false};
+  }
   const news=isNewsQuery(q);
   try{
     if(news){
@@ -607,6 +644,18 @@ async function runWebSearch(query){
 }
 async function runTool(name,input){
   if(name==="web_search")return runWebSearch(input.query);
+  if(name==="web_fetch"){
+    if(state.searchOllama&&state.ollamaKey)return fetchOllama(String(input.url||"").replace(/^\/+/,""));
+    // No Ollama key: fetch raw HTML natively and strip tags.
+    const url=String(input.url||"");
+    if(!/^https?:\/\//.test(url))return {result:"INVALID_URL (needs http/https)",error:true};
+    const r=await httpFetch("GET",url,{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Safari/537.3"});
+    if(r.error||r.status<200||r.status>=300)return {result:"FETCH_FAILED: "+r.body.slice(0,200),error:true};
+    const text=r.body
+      .replace(/<script[\s\S]*?<\/script>/gi,"").replace(/<style[\s\S]*?<\/style>/gi,"")
+      .replace(/<[^>]+>/g," ").replace(/&amp;/g,"&").replace(/&nbsp;/g," ").replace(/\s+/g," ").trim();
+    return {result:("URL: "+url+"\n\n"+text).slice(0,12000),error:false};
+  }
   if(name==="list_files")return fsCall("fsList");
   if(name==="read_file")return fsCall("fsRead",input.path);
   if(name==="search_files")return fsCall("fsSearch",input.query);
@@ -659,12 +708,13 @@ function toolIcon(name){
     create_directory:'<path d="M3 6h7l2 2h9v11H3z"/><path d="M12 11v5M9.5 13.5h5"/>',
     rename_file:'<path d="M5 5h14v14H5z"/><path d="m8 15 7-7M13 8h2v2"/>',
     delete_file:'<path d="M5 7h14M9 7V4h6v3M8 10v7M12 10v7M16 10v7M6 7l1 13h10l1-13"/>',
-    web_search:'<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5S14.6 18.2 12 20.5c-2.6-2.3-3.9-5.2-3.9-8.5S9.4 5.8 12 3.5z"/>'
+    web_search:'<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5S14.6 18.2 12 20.5c-2.6-2.3-3.9-5.2-3.9-8.5S9.4 5.8 12 3.5z"/>',
+    web_fetch:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/>'
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.get_file_info)+'</svg>';
 }
-function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web'}[name]||String(name||'').replace(/_/g,' '))}
-function toolTarget(input){return input?.path||input?.to||input?.query||input?.url||''}
+function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page'}[name]||String(name||'').replace(/_/g,' '))}
+function toolTarget(input){return input?.path||input?.to||input?.query||input?.url||input?.url||''}
 function makeTree(text){
   // Root-level view only: directories first, then files. No recursive branches.
   const lines=String(text||"").split("\n").filter(Boolean);
@@ -718,7 +768,17 @@ $("rowAddToProject").onclick=()=>{closeSheets();addToProject()}
 $("rowToolAccess").onclick=()=>{closeSheets();openSheet("contextSheet")}
 document.addEventListener("click",e=>{const card=e.target.closest("#openProjectCard");if(card)openProject()});
 $("modelBtn").onclick=()=>{openSheet("modelSheet");renderModels()}
-$("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;updateWorkspaceUI()}
+$("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;updateSearchUI();updateWorkspaceUI()}
+function updateSearchUI(){
+  const chk=$("searchOllamaChk");if(!chk)return;
+  chk.checked=state.searchOllama;
+  $("ollamaKeyInput").value=state.ollamaKey;
+  const keyOk=state.searchOllama&&state.ollamaKey;
+  $("ollamaKeyInput").style.display=state.searchOllama?"":"none";
+  $("searchNote").textContent=keyOk?"On: Ollama search + web fetch tools":"Off: free search (Bing/Google News)";
+}
+$("searchOllamaChk").onchange=e=>{state.searchOllama=e.target.checked;save();updateSearchUI()}
+$("ollamaKeyInput").addEventListener("change",e=>{state.ollamaKey=e.target.value.trim();save();updateSearchUI()})
 $("wsEnabled").onchange=e=>{state.wsEnabled=e.target.checked;save();updateWorkspaceUI()}
 $("wsPick").onclick=()=>{if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();else alert("Available in the Android app.")}
 $("wsClear").onclick=()=>{if(window.Android&&Android.clearWorkspace){Android.clearWorkspace()}state.wsEnabled=false;save();updateWorkspaceUI()}
