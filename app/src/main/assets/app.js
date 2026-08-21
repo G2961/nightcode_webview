@@ -57,7 +57,7 @@ function showBanner(text){
   hideBanner();
   const chat=$("chat");
   chat.insertAdjacentHTML("beforeend",`<div class="sys-banner" id="sysBanner"><svg><use href="#i-check"/></svg><span>${esc(text)}</span></div>`);
-  chat.scrollTop=chat.scrollHeight;
+  autoScroll();
 }
 function hideBanner(){const b=$("sysBanner");if(b)b.remove()}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
@@ -174,15 +174,55 @@ function render(){
     return;
   }
   chat.innerHTML=state.messages.map(messageHtml).join("");
-  chat.scrollTop=chat.scrollHeight;
+  // Full re-render keeps the stick state: jump down only if we were at bottom.
+  if(stickToBottom)chat.scrollTop=chat.scrollHeight;
+  updateScrollBtn();
 }
 function showTyping(){
   removeTyping();
   const chat=$("chat");
   chat.insertAdjacentHTML("beforeend",'<div class="message assistant" id="typing"><div class="assistant-activity"><span class="activity-dots"><i></i><i></i><i></i></span><span>Reasoning…</span></div></div>');
-  chat.scrollTop=chat.scrollHeight;
+  autoScroll();
 }
 function removeTyping(){const t=$("typing");if(t)t.remove()}
+
+/* ── Smart auto-scroll: stick to bottom ONLY while the user is already there.
+   Scrolling up to read detaches; a jump-to-bottom button reattaches. ── */
+let stickToBottom=true;
+function chatNearBottom(){
+  const c=$("chat");
+  if(!c)return true;
+  return c.scrollHeight-c.scrollTop-c.clientHeight<80;
+}
+function scrollToBottom(force){
+  const c=$("chat");
+  if(!c)return;
+  if(force)stickToBottom=true;
+  c.scrollTop=c.scrollHeight;
+  updateScrollBtn();
+}
+function autoScroll(){
+  if(stickToBottom)scrollToBottom(false);
+  else updateScrollBtn();
+}
+function updateScrollBtn(){
+  const btn=$("scrollDownBtn");
+  if(!btn)return;
+  const show=!chatNearBottom();
+  btn.classList.toggle("show",show);
+}
+(function initScrollWatcher(){
+  document.addEventListener("DOMContentLoaded",()=>{
+    const c=$("chat");
+    if(!c)return;
+    c.addEventListener("scroll",()=>{
+      const near=chatNearBottom();
+      if(near)stickToBottom=true;
+      else if(c.scrollHeight-c.scrollTop-c.clientHeight>200)stickToBottom=false;
+      updateScrollBtn();
+    },{passive:true});
+  });
+})();
 
 /* ── Native HTTP bridge (bypasses CORS entirely: no origin, no preflight) ── */
 const httpCbs={};let httpCbId=0;
@@ -497,7 +537,7 @@ async function send(){
       const wrap=document.createElement("div");wrap.className="message assistant";
       wrap.appendChild(liveCard);
       chat.appendChild(wrap);
-      chat.scrollTop=chat.scrollHeight;
+      autoScroll();
     };
     const hideLiveCard=()=>{if(liveCard){liveCard.closest(".message").remove();liveCard=null}};
     _hideLiveCardFn=hideLiveCard;
@@ -515,8 +555,8 @@ async function send(){
           const ev=JSON.parse(chunk);
           const tb=document.getElementById("liveBody"),tt=document.getElementById("liveTitle");
           if(ev.type==="content_block_delta"){
-            if(ev.delta&&ev.delta.thinking){ensureLiveCard();allThinking+=ev.delta.thinking;if(tb){tb.textContent=allThinking.slice(-3000);tb.scrollTop=tb.scrollHeight}}
-            if(ev.delta&&ev.delta.text){ensureLiveCard();final+=(final?"":"")+ev.delta.text;if(tt)tt.textContent="Writing…"}
+            if(ev.delta&&ev.delta.thinking){ensureLiveCard();allThinking+=ev.delta.thinking;if(tb){tb.textContent=allThinking.slice(-3000);tb.scrollTop=tb.scrollHeight}autoScroll()}
+            if(ev.delta&&ev.delta.text){ensureLiveCard();final+=(final?"":"")+ev.delta.text;if(tt)tt.textContent="Writing…";autoScroll()}
           }
           if(ev.type==="content_block_start"&&ev.content_block&&ev.content_block.type==="tool_use"){
             if(tt)tt.textContent="Running tool: "+(ev.content_block.name||"");
@@ -960,7 +1000,7 @@ function showToolActivity(name,input){
   const wrap=document.createElement("div");wrap.className="message assistant";
   const card=document.createElement("div");card.className="tool-activity compact";
   card.innerHTML='<div class="tool-activity-head"><div class="tool-activity-icon sm">'+toolIcon(name)+'</div><div class="tool-activity-text"><div class="tool-activity-title">'+esc(toolCompactLabel({name,input}))+'</div></div><div class="tool-activity-status"><span class="tool-spinner"></span></div></div><div class="tool-preview" style="display:none"></div>';
-  wrap.appendChild(card);chat.appendChild(wrap);chat.scrollTop=chat.scrollHeight;
+  wrap.appendChild(card);chat.appendChild(wrap);autoScroll();
   return {update(result,error=false){
     card.querySelector(".tool-preview").innerHTML=toolPreview(name,input,result);
     card.querySelector(".tool-preview").style.display="";
@@ -968,7 +1008,7 @@ function showToolActivity(name,input){
     const st=card.querySelector(".tool-activity-status");
     st.innerHTML=error?'<span style="color:#ff7279">✕</span>':'<svg style="width:14px;height:14px;color:#7fd6a2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>';
     if(error)card.querySelector(".tool-activity-icon").style.color="#ff7279";
-    chat.scrollTop=chat.scrollHeight;
+    autoScroll();
   }};
 }
 
@@ -1092,8 +1132,8 @@ initProjectState();render();renderAttachments();resizeInput();updateModelBtn();r
 // The native WebView padding handles the layout resize; we only keep the chat
 // pinned to the latest message when the viewport shrinks (keyboard opening).
 function syncKeyboard(){
-  const chat=$("chat");
-  if(chat)chat.scrollTop=chat.scrollHeight;
+  // Native insets handle the layout; only pin the chat if we're stuck to bottom.
+  if(stickToBottom)scrollToBottom(false);
 }
 window.visualViewport&&window.visualViewport.addEventListener("resize",syncKeyboard);
 window.addEventListener("resize",syncKeyboard);
