@@ -532,33 +532,67 @@ const FILE_TOOLS=[
 ];
 const WEB_SEARCH_TOOL={name:"web_search",description:"Search the web for current information: documentation, recent events, library APIs, error messages. Returns titles, snippets and URLs.",input_schema:{type:"object",properties:{query:{type:"string",description:"Search query"}},required:["query"]}};
 
-/* Web search via Bing RSS (machine-readable, no captcha walls like DDG lite).
-   httpFetch (native bridge) has no CORS limits. DDG Instant Answers JSON stays
-   as a lightweight fallback for direct encyclopedia-style lookups. */
+/* Web search router: news-type queries go to Google News RSS (excellent Russian
+   coverage, machine-readable), everything else to Bing RSS (stable, no captcha).
+   httpFetch (native bridge) has no CORS limits. DDG Instant Answers is the
+   last-resort fallback. */
+function isNewsQuery(q){
+  return /новост|событ|сегодня|свеж|последн|latest|news|today|this week|breaking|войн|выбор|election|war/i.test(q);
+}
+async function searchGoogleNews(q){
+  const strip=s=>String(s).replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#x27;|&#39;/g,"'").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/\s+/g," ").trim();
+  const r=await httpFetch("GET","https://news.google.com/rss/search?q="+encodeURIComponent(q)+"&hl=ru&gl=UA&ceid=UA:ru",{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Safari/537.3"});
+  console.log("[NightCode] Google News "+JSON.stringify({status:r.status,error:r.error,bodyLength:(r.body||"").length}));
+  if(r.error||r.status<200||r.status>=300||!r.body)return null;
+  const items=[...r.body.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+  const out=[];
+  for(const m of items){
+    const title=(m[1].match(/<title>([\s\S]*?)<\/title>/)||[])[1]||"";
+    const link=(m[1].match(/<link>([\s\S]*?)<\/link>/)||[])[1]||"";
+    const date=(m[1].match(/<pubDate>([\s\S]*?)<\/pubDate>/)||[])[1]||"";
+    const src=(m[1].match(/<source[^>]*>([\s\S]*?)<\/source>/)||[])[1]||"";
+    if(title)out.push((out.length+1)+". "+strip(title)+(src?" — "+strip(src):"")+(date?" ("+strip(date)+")":"")+(link?"\n   URL: "+strip(link):""));
+    if(out.length>=8)break;
+  }
+  return out.length?out.join("\n\n").slice(0,6000):null;
+}
+async function searchBing(q){
+  const strip=s=>String(s).replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#x27;|&#39;/g,"'").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/\s+/g," ").trim();
+  const r=await httpFetch("GET","https://www.bing.com/search?q="+encodeURIComponent(q)+"&format=rss&count=8&setlang=ru",{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Safari/537.3","Accept-Language":"ru-RU,ru;q=0.9,en;q=0.8"});
+  console.log("[NightCode] Bing RSS "+JSON.stringify({status:r.status,error:r.error,bodyLength:(r.body||"").length}));
+  if(r.error||r.status<200||r.status>=300||!r.body)return null;
+  const items=[...r.body.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+  const out=[];
+  for(const m of items){
+    const title=(m[1].match(/<title>([\s\S]*?)<\/title>/)||[])[1]||"";
+    const link=(m[1].match(/<link>([\s\S]*?)<\/link>/)||[])[1]||"";
+    const desc=(m[1].match(/<description>([\s\S]*?)<\/description>/)||[])[1]||"";
+    if(title||link)out.push((out.length+1)+". "+strip(title)+(link?"\n   URL: "+strip(link):"")+(desc?"\n   "+strip(desc):""));
+    if(out.length>=8)break;
+  }
+  return out.length?out.join("\n\n").slice(0,6000):null;
+}
 async function runWebSearch(query){
   const q=String(query||"").trim();
   if(!q)return {result:"EMPTY_QUERY",error:true};
-  const strip=s=>String(s).replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#x27;|&#39;/g,"'").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/\s+/g," ").trim();
+  const news=isNewsQuery(q);
   try{
-    const r=await httpFetch("GET","https://www.bing.com/search?q="+encodeURIComponent(q)+"&format=rss&count=8",{"User-Agent":"Mozilla/5.0 (Android 14; Mobile) Safari/537.3","Accept-Language":"en-US,en;q=0.9"});
-    console.log("[NightCode] Bing RSS "+JSON.stringify({status:r.status,error:r.error,bodyLength:(r.body||"").length}));
-    if(!r.error&&r.status>=200&&r.status<300&&r.body){
-      const items=[...r.body.matchAll(/<item>([\s\S]*?)<\/item>/g)];
-      const out=[];
-      for(const m of items){
-        const title=(m[1].match(/<title>([\s\S]*?)<\/title>/)||[])[1]||"";
-        const link=(m[1].match(/<link>([\s\S]*?)<\/link>/)||[])[1]||"";
-        const desc=(m[1].match(/<description>([\s\S]*?)<\/description>/)||[])[1]||"";
-        if(title||link)out.push((out.length+1)+". "+strip(title)+(link?"\n   URL: "+strip(link):"")+(desc?"\n   "+strip(desc):""));
-        if(out.length>=8)break;
-      }
-      if(out.length)return {result:out.join("\n\n").slice(0,6000),error:false};
+    if(news){
+      const g=await searchGoogleNews(q);
+      if(g)return {result:g,error:false};
     }
-  }catch(e){console.log("[NightCode] Bing RSS parse fail "+String(e&&e.message||e))}
+    const b=await searchBing(q);
+    if(b)return {result:b,error:false};
+    // If Bing looked thin, news results may still exist in Google News.
+    if(!news){
+      const g=await searchGoogleNews(q);
+      if(g)return {result:g,error:false};
+    }
+  }catch(e){console.log("[NightCode] web search fail "+String(e&&e.message||e))}
   try{
     const r=await httpFetch("GET","https://api.duckduckgo.com/?q="+encodeURIComponent(q)+"&format=json&no_html=1&skip_disambig=1",{"User-Agent":"Mozilla/5.0"});
-    console.log("[NightCode] DDG ia "+JSON.stringify({status:r.status,error:r.error,bodyStart:(r.body||"").slice(0,300)}));
     if(!r.error&&r.body){
+      const strip=s=>String(s).replace(/<[^>]+>/g,"").replace(/\s+/g," ").trim();
       const d=JSON.parse(r.body);
       const parts=[];
       if(d.Answer)parts.push("Answer: "+strip(d.Answer));
