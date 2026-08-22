@@ -1772,6 +1772,7 @@ $("menuBtn").onclick=()=>{renderRecent();$("drawer").classList.add("open");$("sc
 $("closeDrawer").onclick=()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")}
 $("scrim").onclick=()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")}
 $("drawerNew").onclick=()=>{newChat();$("closeDrawer").click()}
+$("drawerConsole").onclick=()=>{$("closeDrawer").click();openConsole()}
 $("addBtn").onclick=()=>openSheet("addSheet")
 $("rowProjectFolder").onclick=()=>{closeSheets();openProjectsSheet()}
 $("rowWebSearch").onclick=()=>{closeSheets();$("input").focus()}
@@ -1817,7 +1818,6 @@ $("newProjectName").addEventListener("keydown",e=>{if(e.key==="Enter"){e.prevent
 $("modelBtn").onclick=()=>{openSheet("modelSheet");renderModels()}
 $("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;updateSearchUI();updateWorkspaceUI()}
 /* Console & extensions wiring */
-$("consoleBtn").onclick=openConsole;
 $("consoleClose").onclick=closeSheets;
 $("consoleClear").onclick=()=>{
   if(CON.tab==="logs"){LOGBUF.length=0;renderLogs()}else{$("consoleOut").innerHTML="";coEmptyState(CON.tab)}

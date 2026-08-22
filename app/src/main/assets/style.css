@@ -35,8 +35,8 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 /* height:60px with a 64px padding-top made the content box negative, so flex
    children (logo, icons) overflowed downward. The status inset now sits in
    margin-top, keeping the bar itself a clean 60px with centered content. */
-.topbar{height:60px;min-height:60px;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;margin-top:calc(15px + var(--sys-status,0px));position:relative;z-index:5;touch-action:none}
-.brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;letter-spacing:.2px}
+.topbar{height:60px;min-height:60px;display:grid;grid-template-columns:40px 1fr 40px;align-items:center;padding:8px 10px;margin-top:calc(15px + var(--sys-status,0px));position:relative;z-index:5;touch-action:none}
+.brand{display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px;font-weight:650;letter-spacing:.2px}
 .brand-logo{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;color:#dfe3ff;
   background:linear-gradient(135deg,rgba(124,140,255,.28),rgba(163,124,255,.16));
   border:1px solid rgba(140,150,255,.28)}
@@ -221,7 +221,7 @@ textarea::placeholder{color:var(--text-3)}
 
 .primary,.secondary{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;border-radius:14px;padding:13px;margin:6px 0;font-weight:600;font-size:13.5px;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 4px 16px rgba(124,140,255,.28);transition:transform .12s,box-shadow .15s}
 .primary:active{transform:scale(.98);box-shadow:none}
-.primary svg{width:16px;height:16px}
+.primary svg,.secondary svg{width:16px;height:16px}
 .secondary{background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);box-shadow:none}
 .secondary:active{transform:scale(.98)}
 
@@ -333,7 +333,7 @@ code.inline-code{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,
 .markdown h1,.markdown h2,.markdown h3{margin:12px 0 7px;line-height:1.2}.markdown h1{font-size:19px}.markdown h2{font-size:17px}.markdown h3{font-size:15px}
 
 /* ── Tool activity cards ────────────── */
-.tool-activity{align-self:flex-start;width:min(94%,560px);border:1px solid #2a2f37;background:linear-gradient(180deg,#15181d,#111318);border-radius:15px;overflow:hidden;box-shadow:0 8px 26px rgba(0,0,0,.27);margin:2px 0 8px;animation:msgIn .25s ease}
+.tool-activity{align-self:flex-start;width:min(94%,560px);border:1px solid #2a2f37;background:linear-gradient(180deg,#15181d,#111318);border-radius:15px;overflow:hidden;box-shadow:0 8px 26px rgba(0,0,0,.27);margin:2px 0 16px;animation:msgIn .25s ease}
 .tool-activity-head{min-height:43px;padding:9px 11px;display:flex;align-items:center;gap:9px;border-bottom:1px solid #242830}
 .tool-activity-icon{width:28px;height:28px;border-radius:9px;background:#20242b;color:#9aaeff;display:grid;place-items:center;flex:0 0 auto}
 .tool-activity-icon svg{width:15px;height:15px;stroke-width:1.6}
