@@ -74,7 +74,7 @@
       <button onclick="openFiles()"><svg><use href="#i-image"/></svg><small>Photos</small></button>
       <button onclick="openFiles()"><svg><use href="#i-file"/></svg><small>Files</small></button>
     </div>
-    <button class="sheet-row" id="rowProjectFolder"><span class="row-ico"><svg><use href="#i-folder"/></svg></span>Project folder<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <button class="sheet-row" id="rowProjectFolder"><span class="row-ico"><svg><use href="#i-folder"/></svg></span>Projects<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
     <button class="sheet-row" id="rowWebSearch"><span class="row-ico"><svg><use href="#i-globe"/></svg></span>Web search<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
     <button class="sheet-row" id="rowAddToProject"><span class="row-ico"><svg><use href="#i-file"/></svg></span>Add to project<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
     <button class="sheet-row" id="rowToolAccess"><span class="row-ico"><svg><use href="#i-sliders"/></svg></span>Tool access<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
@@ -124,6 +124,22 @@
     <div class="sheet-title">Select model</div>
     <div id="models"></div>
     <button class="secondary" id="refreshModels">Refresh models</button>
+  </div>
+
+  <div id="projectsSheet" class="sheet">
+    <div class="sheet-title">Projects</div>
+    <div id="projectsWsSetup" style="display:none">
+      <div class="ext-empty">Pick a permanent folder first — projects live inside it as subfolders.</div>
+      <button class="primary" id="projectsPickWs"><svg><use href="#i-folder"/></svg>Choose projects folder</button>
+    </div>
+    <div id="projectsWsBody" style="display:none">
+      <div class="new-project-row">
+        <input id="newProjectName" placeholder="New project name" autocomplete="off">
+        <button class="icon-btn" id="newProjectBtn" aria-label="Create"><svg><use href="#i-plus"/></svg></button>
+      </div>
+      <div id="projectsList"></div>
+      <button class="sheet-row link" id="projectsOtherFolder"><span class="row-ico"><svg><use href="#i-folder"/></svg></span>Open a folder outside projects<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    </div>
   </div>
 
   <div id="contextSheet" class="sheet">

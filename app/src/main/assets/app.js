@@ -147,7 +147,7 @@ function welcomeHtml(){
     </button>
     <button class="quick" id="openProjectCard">
       <span class="quick-ico"><svg><use href="#i-folder"/></svg></span>
-      <span class="quick-text"><b>Open project</b><small id="openProjectSub">${projectSub}</small></span>
+      <span class="quick-text"><b>Projects</b><small id="openProjectSub">${projectSub}</small></span>
       <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
     </button>
     <button class="quick" onclick="openConsole()">
@@ -357,6 +357,27 @@ function fsCall(method,...args){
 async function openProject(){
   if(window.Android&&Android.openProjectPicker){Android.openProjectPicker()}
   else alert("Project folders are available in the Android app.");
+}
+async function listWorkspaceProjects(){
+  const r=await fsCall("listWorkspaceProjects");
+  if(r.error)return [];
+  return r.result.split("\n").filter(Boolean);
+}
+async function switchWorkspaceProject(name){
+  const r=await fsCall("switchWorkspaceProject",name);
+  if(r.error)return false;
+  state.projectName=name;
+  SHELL.listing=null;SHELL.cwd=[];
+  save();loadExtensions();render();
+  return true;
+}
+async function createWorkspaceProject(name){
+  const r=await fsCall("createWorkspaceProject",name);
+  if(r.error)return {ok:false,error:r.result};
+  state.projectName=name;
+  SHELL.listing=null;SHELL.cwd=[];
+  save();loadExtensions();render();
+  return {ok:true};
 }
 window.__onProjectPicked=function(name){
   if(name){
@@ -695,8 +716,11 @@ async function send(override){
     }
     messages.push({role:"user",content:regen?buildUserContent(lastMsg.text,lastMsg.attachments||[]):buildUserContent(prompt,at)});
     const proj=hasProject();
+    const ws=hasWorkspace();
     const system=(proj
       ?"You are NightCode, a local AI coding agent. You have tools to inspect and edit the user's selected project, but do NOT use them proactively — only call a tool when the user's message actually asks for something that requires it (reading, writing, searching, running code). A greeting or general question gets a plain reply with no tool calls. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded. Use web_search whenever fresh information would help (docs, versions, errors)."
+      :ws
+      ?"You are NightCode, a local AI coding agent. No project is currently open, but a projects folder is connected — do NOT use file tools proactively, only when the user's message actually asks for it. If the user asks you to build/create something new, first call create_directory with a short kebab-case name for the new project (e.g. \"my-app\"), then create all its files as paths INSIDE that directory (e.g. \"my-app/index.html\") — never write files directly at the root. If the user instead refers to continuing/opening an existing project, tell them to pick it from Projects in the menu; you cannot switch projects yourself. Be concise. Use web_search whenever fresh information would help."
       :"You are NightCode, a helpful AI assistant. There is no project folder connected, so do not assume access to local files. You have the web_search tool — use it only when the user's question actually needs current information; do not search proactively on greetings or general chat. Cite source URLs when you do search.")
       +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
     let final="";const toolCalls=[];let allThinking="";
@@ -732,10 +756,11 @@ async function send(override){
     for(let turn=0;turn<8;turn++){
       const lim=getCtxLimits();
       const body={model:state.selected,max_tokens:Number(lim.output)||6000,system,messages,stream:true};
-      // Web tools always available; file tools only with a connected project.
+      // Web tools always available; file tools with a connected project OR a
+      // workspace folder (so the model can create a new project inside it).
       const webTools=(state.searchProvider!=="free"&&state.ollamaKey)?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
       // Extension tools ride along in every mode — they may not need a project.
-      body.tools=[...(proj?FILE_TOOLS:[]),...webTools,...extToolDefs()];
+      body.tools=[...((proj||hasWorkspace())?FILE_TOOLS:[]),...webTools,...extToolDefs()];
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
       // Full SSE parser: collects thinking, text AND tool_use blocks straight from
       // the stream (content_block_start carries id/name, input_json_delta carries
@@ -1143,6 +1168,9 @@ async function runTool(name,input){
 }
 function hasProject(){
   return !!(window.Android&&Android.hasProject&&Android.hasProject());
+}
+function hasWorkspace(){
+  return !!(window.Android&&Android.hasWorkspace&&Android.hasWorkspace());
 }
 
 /* ── Console: Shell over the connected folder + JS REPL + log viewer ── */
@@ -1745,11 +1773,47 @@ $("closeDrawer").onclick=()=>{$("drawer").classList.remove("open");$("scrim").cl
 $("scrim").onclick=()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")}
 $("drawerNew").onclick=()=>{newChat();$("closeDrawer").click()}
 $("addBtn").onclick=()=>openSheet("addSheet")
-$("rowProjectFolder").onclick=()=>{closeSheets();openProject()}
+$("rowProjectFolder").onclick=()=>{closeSheets();openProjectsSheet()}
 $("rowWebSearch").onclick=()=>{closeSheets();$("input").focus()}
 $("rowAddToProject").onclick=()=>{closeSheets();addToProject()}
 $("rowToolAccess").onclick=()=>{closeSheets();openSheet("contextSheet")}
-document.addEventListener("click",e=>{const card=e.target.closest("#openProjectCard");if(card)openProject()});
+async function openProjectsSheet(){
+  openSheet("projectsSheet");
+  const hasWs=!!(window.Android&&Android.hasWorkspace&&Android.hasWorkspace());
+  $("projectsWsSetup").style.display=hasWs?"none":"";
+  $("projectsWsBody").style.display=hasWs?"":"none";
+  if(!hasWs)return;
+  const list=$("projectsList");
+  list.innerHTML='<div class="ext-empty">Loading…</div>';
+  const names=await listWorkspaceProjects();
+  if(!names.length){list.innerHTML='<div class="ext-empty">No projects yet — create one above.</div>';return}
+  list.innerHTML=names.map(n=>`<button class="recent-chat project-row ${n===state.projectName?"active":""}" data-project="${esc(n)}">
+    <span class="chat-dot"></span>
+    <span class="recent-chat-main"><span class="recent-chat-title">${esc(n)}</span></span>
+    ${n===state.projectName?'<span class="row-arrow"><svg><use href="#i-check"/></svg></span>':""}
+  </button>`).join("");
+}
+document.addEventListener("click",e=>{const card=e.target.closest("#openProjectCard");if(card)openProjectsSheet()});
+document.addEventListener("click",e=>{
+  const row=e.target.closest(".project-row");
+  if(row){switchWorkspaceProject(row.dataset.project).then(()=>closeSheets());return}
+});
+$("projectsPickWs").onclick=()=>{if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();else alert("Available in the Android app.")}
+$("projectsOtherFolder").onclick=()=>{closeSheets();openProject()}
+async function createProjectFromInput(){
+  const input=$("newProjectName");
+  const name=input.value.trim();
+  if(!name)return;
+  if(!/^[\w.-]+$/.test(name)){alert("Use letters, numbers, - or _ only.");return}
+  const btn=$("newProjectBtn");btn.disabled=true;
+  const r=await createWorkspaceProject(name);
+  btn.disabled=false;
+  if(!r.ok){alert("Couldn't create project: "+r.error);return}
+  input.value="";
+  closeSheets();
+}
+$("newProjectBtn").onclick=createProjectFromInput;
+$("newProjectName").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();createProjectFromInput()}});
 $("modelBtn").onclick=()=>{openSheet("modelSheet");renderModels()}
 $("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;updateSearchUI();updateWorkspaceUI()}
 /* Console & extensions wiring */
@@ -1877,7 +1941,7 @@ $("saveKeyBtn").onclick=()=>{
 $("verifyOllamaBtn").onclick=verifyOllamaKey;
 $("wsEnabled").onchange=e=>{state.wsEnabled=e.target.checked;save();updateWorkspaceUI()}
 $("wsPick").onclick=()=>{if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();else alert("Available in the Android app.")}
-$("wsClear").onclick=()=>{if(window.Android&&Android.clearWorkspace){Android.clearWorkspace()}state.wsEnabled=false;save();updateWorkspaceUI()}
+$("wsClear").onclick=()=>{if(window.Android&&Android.clearWorkspace){Android.clearWorkspace()}state.wsEnabled=false;state.projectName=(window.Android&&Android.hasProject&&Android.hasProject())?Android.getProjectName():"";save();updateWorkspaceUI();render()}
 $("saveSettings").onclick=async()=>{
   state.base=$("baseUrl").value.trim();state.key=$("apiKey").value.trim();save();
   const btn=$("saveSettings");btn.disabled=true;const label=btn.textContent;btn.textContent="Saving…";

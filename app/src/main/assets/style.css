@@ -205,6 +205,12 @@ textarea::placeholder{color:var(--text-3)}
 .recent-empty svg{width:22px;height:22px;opacity:.6}
 .recent-chat{display:flex;align-items:center;gap:10px;width:100%;padding:10px 8px;border-radius:12px;text-align:left;color:var(--text-2);transition:background .15s}
 .recent-chat:active{background:var(--surface-2)}
+.project-row.active{background:rgba(124,140,255,.08);color:var(--text)}
+.project-row .row-arrow{color:#93a5ff}
+.new-project-row{display:flex;gap:8px;margin-bottom:12px}
+.new-project-row input{flex:1;min-width:0;background:#0c0e12;border:1px solid var(--border-strong);border-radius:13px;padding:11px 13px;outline:0;color:var(--text);font-size:13px;transition:border-color .15s}
+.new-project-row input:focus{border-color:rgba(124,140,255,.55)}
+.new-project-row .icon-btn{width:44px;height:44px;background:var(--surface-2);border-radius:13px;flex:0 0 auto}
 .chat-dot{width:7px;height:7px;min-width:7px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-2))}
 .recent-chat-main{display:flex;flex-direction:column;min-width:0;flex:1}
 .recent-chat-title{font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

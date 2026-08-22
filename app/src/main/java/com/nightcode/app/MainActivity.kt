@@ -30,6 +30,10 @@ class MainActivity : ComponentActivity() {
     private var projectName: String = ""
     private var workspaceRoot: DocumentFile? = null
     private var workspaceName: String = ""
+    // When the active project is a subfolder of the workspace (not a separately
+    // picked SAF tree), we persist just its name — restoring re-resolves it as a
+    // child of workspaceRoot rather than needing its own tree permission.
+    private var projectIsWorkspaceChild: Boolean = false
 
     @Volatile private var activeRequests = 0
     private var wakeLock: PowerManager.WakeLock? = null
@@ -78,8 +82,9 @@ class MainActivity : ComponentActivity() {
         }
 
         // Restore previously granted folders (persistable URI permissions).
-        restoreProject()
+        // Workspace first: a workspace-child project resolves relative to it.
         restoreWorkspace()
+        restoreProject()
 
         webView = WebView(this).apply {
             setBackgroundColor(0xFF090A0C.toInt())
@@ -205,6 +210,7 @@ class MainActivity : ComponentActivity() {
                     } catch (_: SecurityException) {}
                     projectRoot = DocumentFile.fromTreeUri(this, uri)
                     projectName = projectRoot?.name ?: "project"
+                    projectIsWorkspaceChild = false
                     saveProject(uri)
                 }
                 val name = if (projectRoot != null) jsonString(projectName) else "null"
@@ -263,14 +269,44 @@ class MainActivity : ComponentActivity() {
             .edit()
             .putString("projectUri", uri.toString())
             .putString("projectName", projectName)
+            .remove("projectWorkspaceChild")
             .apply()
     }
 
     private fun restoreProject() {
+        val prefs = getSharedPreferences("nightcode", MODE_PRIVATE)
+        val childName = prefs.getString("projectWorkspaceChild", null)
+        if (childName != null) {
+            val ws = workspaceRoot
+            val child = ws?.findFile(childName)?.takeIf { it.isDirectory }
+            if (child != null) {
+                projectRoot = child
+                projectName = childName
+                projectIsWorkspaceChild = true
+                return
+            }
+            // Workspace or the subfolder is gone — fall through and clear state
+            // rather than silently resolving to nothing.
+            prefs.edit().remove("projectWorkspaceChild").remove("projectUri").remove("projectName").apply()
+            return
+        }
         restoreFolder("projectUri", "projectName") { root, name ->
             projectRoot = root
             projectName = name
+            projectIsWorkspaceChild = false
         }
+    }
+
+    /** Switch the active project to a subfolder of the workspace — no new SAF
+     * grant needed since the workspace tree permission already covers it. */
+    private fun saveWorkspaceChildProject(name: String) {
+        projectIsWorkspaceChild = true
+        getSharedPreferences("nightcode", MODE_PRIVATE)
+            .edit()
+            .putString("projectWorkspaceChild", name)
+            .remove("projectUri")
+            .remove("projectName")
+            .apply()
     }
 
     private fun saveWorkspace(uri: Uri) {
@@ -516,16 +552,74 @@ class MainActivity : ComponentActivity() {
         fun clearWorkspace() {
             workspaceRoot = null
             workspaceName = ""
-            getSharedPreferences("nightcode", MODE_PRIVATE).edit()
-                .remove("workspaceUri").remove("workspaceName").apply()
+            val prefs = getSharedPreferences("nightcode", MODE_PRIVATE)
+            // A workspace-child project has no independent tree permission —
+            // it goes away with the workspace that granted it.
+            if (projectIsWorkspaceChild) {
+                projectRoot = null
+                projectName = ""
+                projectIsWorkspaceChild = false
+                prefs.edit().remove("projectWorkspaceChild").apply()
+            }
+            prefs.edit().remove("workspaceUri").remove("workspaceName").apply()
         }
 
         @JavascriptInterface
         fun clearProject() {
             projectRoot = null
             projectName = ""
+            projectIsWorkspaceChild = false
             getSharedPreferences("nightcode", MODE_PRIVATE).edit()
-                .remove("projectUri").remove("projectName").apply()
+                .remove("projectUri").remove("projectName").remove("projectWorkspaceChild").apply()
+        }
+
+        /** Top-level subfolders of the workspace — the project list. One name per line. */
+        @JavascriptInterface
+        fun listWorkspaceProjects(cb: String) {
+            val ws = workspaceRoot
+            if (ws == null) { fsCallback(cb, "NO_WORKSPACE", true); return }
+            Thread {
+                try {
+                    val names = ws.listFiles().filter { it.isDirectory }.mapNotNull { it.name }.sorted()
+                    fsCallback(cb, names.joinToString("\n"), false)
+                } catch (e: Exception) {
+                    fsCallback(cb, e.message ?: "LIST_FAILED", true)
+                }
+            }.start()
+        }
+
+        /** Make an existing workspace subfolder the active project. */
+        @JavascriptInterface
+        fun switchWorkspaceProject(name: String, cb: String) {
+            val ws = workspaceRoot
+            if (ws == null) { fsCallback(cb, "NO_WORKSPACE", true); return }
+            Thread {
+                val child = ws.findFile(name)?.takeIf { it.isDirectory }
+                if (child == null) { fsCallback(cb, "NOT_FOUND", true); return@Thread }
+                projectRoot = child
+                projectName = name
+                saveWorkspaceChildProject(name)
+                fsCallback(cb, name, false)
+            }.start()
+        }
+
+        /** Create a new subfolder under the workspace and switch to it. */
+        @JavascriptInterface
+        fun createWorkspaceProject(name: String, cb: String) {
+            val ws = workspaceRoot
+            if (ws == null) { fsCallback(cb, "NO_WORKSPACE", true); return }
+            Thread {
+                try {
+                    if (ws.findFile(name) != null) throw Exception("ALREADY_EXISTS")
+                    val dir = ws.createDirectory(name) ?: throw Exception("CREATE_FAILED")
+                    projectRoot = dir
+                    projectName = name
+                    saveWorkspaceChildProject(name)
+                    fsCallback(cb, name, false)
+                } catch (e: Exception) {
+                    fsCallback(cb, e.message ?: "CREATE_FAILED", true)
+                }
+            }.start()
         }
 
         @JavascriptInterface
