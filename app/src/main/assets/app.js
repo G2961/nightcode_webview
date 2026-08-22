@@ -137,10 +137,11 @@ function extractReasoning(text){
 }
 function welcomeHtml(){
   const projectSub=state.projectName?"Connected: "+esc(state.projectName):"Continue coding";
+  const proj=hasProject();
   return `<section id="welcome" class="welcome">
     <div class="star"><svg><use href="#i-moon"/></svg></div>
     <h1>Hello, night owl</h1>
-    <button class="quick" id="newChat">
+    ${proj?"":`<button class="quick" id="newChat">
       <span class="quick-ico"><svg><use href="#i-plus"/></svg></span>
       <span class="quick-text"><b>New chat</b></span>
       <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
@@ -149,7 +150,7 @@ function welcomeHtml(){
       <span class="quick-ico"><svg><use href="#i-folder"/></svg></span>
       <span class="quick-text"><b>Open project</b><small id="openProjectSub">${projectSub}</small></span>
       <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
-    </button>
+    </button>`}
     <button class="quick" onclick="openConsole()">
       <span class="quick-ico"><svg><use href="#i-term"/></svg></span>
       <span class="quick-text"><b>Console</b><small>Shell, JS REPL, logs</small></span>
@@ -180,7 +181,7 @@ function messageHtml(m,idx){
     }
     if(thinking){
       const dur=m.reasoning?formatReasoningTime(m.reasoning):null;
-      reasoningHtml=`<details class="tool-activity reasoning-card"><summary class="tool-activity-head"><div class="tool-activity-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4.5 4.5 0 0 0-4.5 4.5c0 .7.2 1.4.5 2A4 4 0 0 0 5 13.5 4 4 0 0 0 9 17.5h.5A3.5 3.5 0 0 0 12 20a3.5 3.5 0 0 0 2.5-2.5H15a4 4 0 0 0 4-4 4 4 0 0 0-3-3.8c.3-.6.5-1.3.5-2A4.5 4.5 0 0 0 12 3z"/></svg></div><div class="tool-activity-text"><div class="tool-activity-title">Thinking</div><div class="tool-activity-sub">Thought for ${dur||"a moment"}</div></div><div class="reasoning-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></summary><div class="tool-preview"><pre>${esc(thinking)}</pre></div></details>`;
+      reasoningHtml=`<details class="tool-activity compact reasoning-card"><summary class="tool-activity-head"><div class="tool-activity-icon sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4.5 4.5 0 0 0-4.5 4.5c0 .7.2 1.4.5 2A4 4 0 0 0 5 13.5 4 4 0 0 0 9 17.5h.5A3.5 3.5 0 0 0 12 20a3.5 3.5 0 0 0 2.5-2.5H15a4 4 0 0 0 4-4 4 4 0 0 0-3-3.8c.3-.6.5-1.3.5-2A4.5 4.5 0 0 0 12 3z"/></svg></div><div class="tool-activity-text"><div class="tool-activity-title">Thinking</div><div class="tool-activity-sub">Thought for ${dur||"a moment"}</div></div><div class="reasoning-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></summary><div class="tool-preview"><pre>${esc(thinking)}</pre></div></details>`;
     }
   }
   const bodyText=m.text;
@@ -194,7 +195,7 @@ function render(){
   const chat=$("chat");
   if(!state.messages.length){
     chat.innerHTML=welcomeHtml();
-    $("newChat").onclick=()=>newChat();
+    const nc=$("newChat");if(nc)nc.onclick=()=>newChat();
     return;
   }
   chat.innerHTML=state.messages.map(messageHtml).join("");
@@ -719,7 +720,7 @@ async function send(override){
       removeTyping();
       const chat=$("chat");
       liveCard=document.createElement("details");
-      liveCard.className="tool-activity compact";
+      liveCard.className="tool-activity compact reasoning-card";
       liveCard.open=true;
       liveCard.innerHTML='<summary class="tool-activity-head"><div class="tool-activity-icon sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4.5 4.5 0 0 0-4.5 4.5c0 .7.2 1.4.5 2A4 4 0 0 0 5 13.5 4 4 0 0 0 9 17.5h.5A3.5 3.5 0 0 0 12 20a3.5 3.5 0 0 0 2.5-2.5H15a4 4 0 0 0 4-4 4 4 0 0 0-3-3.8c.3-.6.5-1.3.5-2A4.5 4.5 0 0 0 12 3z"/></svg></div><div class="tool-activity-text"><div class="tool-activity-title" id="liveTitle">Thinking…</div></div><div class="tool-activity-status"><span class="tool-spinner"></span></div></summary><div class="tool-preview"><pre id="liveBody"></pre></div>';
       const wrap=document.createElement("div");wrap.className="message assistant";
