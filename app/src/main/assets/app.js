@@ -137,11 +137,10 @@ function extractReasoning(text){
 }
 function welcomeHtml(){
   const projectSub=state.projectName?"Connected: "+esc(state.projectName):"Continue coding";
-  const proj=hasProject();
   return `<section id="welcome" class="welcome">
     <div class="star"><svg><use href="#i-moon"/></svg></div>
     <h1>Hello, night owl</h1>
-    ${proj?"":`<button class="quick" id="newChat">
+    <button class="quick" id="newChat">
       <span class="quick-ico"><svg><use href="#i-plus"/></svg></span>
       <span class="quick-text"><b>New chat</b></span>
       <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
@@ -150,7 +149,7 @@ function welcomeHtml(){
       <span class="quick-ico"><svg><use href="#i-folder"/></svg></span>
       <span class="quick-text"><b>Open project</b><small id="openProjectSub">${projectSub}</small></span>
       <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
-    </button>`}
+    </button>
     <button class="quick" onclick="openConsole()">
       <span class="quick-ico"><svg><use href="#i-term"/></svg></span>
       <span class="quick-text"><b>Console</b><small>Shell, JS REPL, logs</small></span>
