@@ -696,8 +696,8 @@ async function send(override){
     messages.push({role:"user",content:regen?buildUserContent(lastMsg.text,lastMsg.attachments||[]):buildUserContent(prompt,at)});
     const proj=hasProject();
     const system=(proj
-      ?"You are NightCode, a local AI coding agent. You work on the user's selected project through tools. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded. Use web_search whenever fresh information would help (docs, versions, errors)."
-      :"You are NightCode, a helpful AI assistant. There is no project folder connected, so do not assume access to local files. You have the web_search tool — use it whenever the question benefits from current information (documentation, news, library APIs, recent releases) and cite source URLs in your answer.")
+      ?"You are NightCode, a local AI coding agent. You have tools to inspect and edit the user's selected project, but do NOT use them proactively — only call a tool when the user's message actually asks for something that requires it (reading, writing, searching, running code). A greeting or general question gets a plain reply with no tool calls. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded. Use web_search whenever fresh information would help (docs, versions, errors)."
+      :"You are NightCode, a helpful AI assistant. There is no project folder connected, so do not assume access to local files. You have the web_search tool — use it only when the user's question actually needs current information; do not search proactively on greetings or general chat. Cite source URLs when you do search.")
       +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
     let final="";const toolCalls=[];let allThinking="";
     let liveCard=null;
