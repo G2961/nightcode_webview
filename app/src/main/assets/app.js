@@ -205,7 +205,7 @@ function render(){
 function showTyping(){
   removeTyping();
   const chat=$("chat");
-  chat.insertAdjacentHTML("beforeend",'<div class="message assistant" id="typing"><div class="assistant-activity"><span class="activity-dots"><i></i><i></i><i></i></span><span>Reasoning…</span></div></div>');
+  chat.insertAdjacentHTML("beforeend",'<div class="message assistant" id="typing"><div class="assistant-activity"><span class="activity-dots"><i></i><i></i><i></i></span><span>Thinking</span></div></div>');
   autoScroll();
 }
 function removeTyping(){const t=$("typing");if(t)t.remove()}
@@ -556,11 +556,14 @@ function renderModels(){
   box.innerHTML=state.models.map(m=>{
     const p=m.provider||provider(m.id);
     const sel=m.id===state.selected;
+    const ctx=state.modelContext&&state.modelContext[m.id];
     return `<button class="model-item ${sel?"selected":""}" onclick="selectModel('${encodeURIComponent(m.id)}')">
       <div class="model-icon p-${p}">${esc(p[0].toUpperCase())}</div>
-      <div><div class="model-name">${esc(m.name||m.id)}</div><div class="model-provider">${esc(p)}</div></div>
-      ${state.modelContext&&state.modelContext[m.id]?`<span class="ctx-badge" title="Custom context settings">${fmtTokens(state.modelContext[m.id].input)}/${fmtTokens(state.modelContext[m.id].output)}</span>`:""}
-      ${sel?'<span class="row-arrow" style="margin-left:auto;color:#93a5ff"><svg><use href="#i-check"/></svg></span>':""}
+      <div class="model-main"><div class="model-name">${esc(m.name||m.id)}</div><div class="model-provider">${esc(p)}</div></div>
+      <div class="model-end">
+        ${ctx?`<span class="ctx-badge" title="Custom context settings">${fmtTokens(ctx.input)}/${fmtTokens(ctx.output)}</span>`:""}
+        ${sel?'<span class="row-arrow"><svg><use href="#i-check"/></svg></span>':""}
+      </div>
     </button>`;
   }).join("");
 }
@@ -741,7 +744,6 @@ async function send(override){
       const blocks={};          // index -> {type,id,name,inputJson}
       let stopReason=null;
       const data={content:[]};
-      ensureLiveCard();
       const r=await withRetry(()=>httpStream("POST",reqUrl,{"content-type":"application/json","x-api-key":state.key,"anthropic-version":"2023-06-01"},JSON.stringify(body),chunk=>{
         try{
           const ev=JSON.parse(chunk);
@@ -758,12 +760,20 @@ async function send(override){
           if(ev.type==="content_block_delta"){
             const d=ev.delta||{};
             if(d.thinking){
+              if(blocks[ev.index])blocks[ev.index].thinking=(blocks[ev.index].thinking||"")+d.thinking;
               ensureLiveCard();allThinking+=d.thinking;
               const tb=document.getElementById("liveBody");
               if(tb){tb.textContent=allThinking.slice(-3000);tb.scrollTop=tb.scrollHeight}
               autoScroll();
             }
-            if(d.text){ensureLiveCard();if(tt)tt.textContent="Writing…";ensureLiveBubble();if(liveBubbleText){liveBubbleText.textContent+=d.text;if(liveBubbleText.textContent.length>4000)liveBubbleText.textContent=liveBubbleText.textContent.slice(-4000)}autoScroll()}
+            if(d.text){
+              if(blocks[ev.index])blocks[ev.index].text=(blocks[ev.index].text||"")+d.text;
+              removeTyping();
+              if(liveCard&&tt)tt.textContent="Writing…";
+              ensureLiveBubble();
+              if(liveBubbleText){liveBubbleText.textContent+=d.text;if(liveBubbleText.textContent.length>4000)liveBubbleText.textContent=liveBubbleText.textContent.slice(-4000)}
+              autoScroll();
+            }
             if(d.partial_json&&blocks[ev.index])blocks[ev.index].inputJson+=d.partial_json;
           }
           if(ev.type==="message_delta"&&ev.delta&&ev.delta.stop_reason)stopReason=ev.delta.stop_reason;
@@ -803,8 +813,8 @@ async function send(override){
       const content=[];
       for(const idx of Object.keys(blocks).map(Number).sort((a,b)=>a-b)){
         const b=blocks[idx];
-        if(b.type==="text")content.push({type:"text",text:""});
-        else if(b.type==="thinking")content.push({type:"thinking",thinking:""});
+        if(b.type==="text")content.push({type:"text",text:b.text||""});
+        else if(b.type==="thinking")content.push({type:"thinking",thinking:b.thinking||""});
         else if(b.type==="tool_use"){
           let parsed={};
           try{parsed=JSON.parse(b.inputJson||"{}")}catch(e){console.log("[NightCode] tool input parse fail "+String(e&&e.message||e))}

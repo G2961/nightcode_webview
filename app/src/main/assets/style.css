@@ -49,7 +49,7 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .chat{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:10px 14px 16px;scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
 .chat::-webkit-scrollbar{width:0}
 
-.welcome{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-bottom:30px}
+.welcome{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-bottom:120px}
 .star{width:62px;height:62px;margin-bottom:22px;filter:drop-shadow(0 0 20px rgba(124,140,255,.5))}
 .star svg{width:100%;height:100%}
 .welcome h1{font-family:Georgia,'Times New Roman',serif;font-size:26px;font-weight:500;margin:0 0 6px;
@@ -106,7 +106,7 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .key-status.bad{color:#ff7279;background:rgba(255,114,121,.08)}
 .ctx-model-note{font-size:11.5px;padding:8px 10px;border-radius:10px;background:var(--surface-2);color:var(--text-2);margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctx-model-note.on{color:#a9b6ff;background:rgba(124,140,255,.08)}
-.ctx-badge{font-size:9.5px;color:#a9b6ff;background:rgba(124,140,255,.1);border:1px solid rgba(124,140,255,.22);border-radius:7px;padding:2px 6px;margin-left:auto;white-space:nowrap}
+.ctx-badge{font-size:9.5px;color:#a9b6ff;background:rgba(124,140,255,.1);border:1px solid rgba(124,140,255,.22);border-radius:7px;padding:2px 6px;white-space:nowrap}
 /* Jump-to-bottom pill: appears only when the user has scrolled away */
 .scroll-down-btn{position:absolute;right:16px;bottom:110px;z-index:9;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:rgba(28,31,39,.95);border:1px solid var(--border-strong);color:#b9beca;box-shadow:0 6px 18px rgba(0,0,0,.45);opacity:0;pointer-events:none;transform:translateY(8px);transition:opacity .18s,transform .18s}
 .scroll-down-btn svg{width:17px;height:17px}
@@ -220,7 +220,7 @@ textarea::placeholder{color:var(--text-3)}
 .secondary:active{transform:scale(.98)}
 
 /* ── Bottom sheets ───────────────────── */
-.sheet{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(10px + max(var(--sys-nav,0px),var(--sys-ime,0px)));max-height:82vh;overflow:auto;background:#12141a;border:1px solid var(--border-strong);border-radius:var(--radius-lg);padding:14px 16px 16px;box-shadow:0 20px 60px rgba(0,0,0,.6);transform:translateY(110%);transition:transform .32s cubic-bezier(.32,.72,.24,1)}
+.sheet{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(10px + max(var(--sys-nav,0px),var(--sys-ime,0px)));max-height:calc(100vh - 20px - var(--sys-status,0px) - max(var(--sys-nav,0px),var(--sys-ime,0px)));overflow:auto;background:#12141a;border:1px solid var(--border-strong);border-radius:var(--radius-lg);padding:14px 16px 16px;box-shadow:0 20px 60px rgba(0,0,0,.6);transform:translateY(110%);transition:transform .32s cubic-bezier(.32,.72,.24,1)}
 .sheet.open{transform:none}
 .sheet::before{content:"";display:block;width:36px;height:4px;border-radius:2px;background:#2c3038;margin:0 auto 12px}
 .sheet::-webkit-scrollbar{width:0}
@@ -270,8 +270,12 @@ textarea::placeholder{color:var(--text-3)}
 .model-item:active{background:var(--surface-2)}
 .model-item.selected{border-color:rgba(124,140,255,.6);background:rgba(124,140,255,.08)}
 .model-icon{width:38px;height:38px;min-width:38px;border-radius:12px;display:grid;place-items:center;margin-right:11px;font-weight:700;font-size:13px;color:#fff}
-.model-name{font-size:13px;font-weight:550}
+.model-main{flex:1;min-width:0;overflow:hidden}
+.model-name{font-size:13px;font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .model-provider{font-size:10.5px;color:var(--text-3);margin-top:3px;text-transform:capitalize}
+.model-end{display:flex;align-items:center;gap:8px;margin-left:10px;flex:0 0 auto}
+.model-end .row-arrow{margin-left:0;color:#93a5ff}
+.model-end .row-arrow svg{width:16px;height:16px}
 .empty-models{color:var(--text-3);font-size:12px;text-align:center;padding:24px 10px}
 
 .p-anthropic{background:linear-gradient(135deg,#d97757,#c05c3f)}
