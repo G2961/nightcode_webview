@@ -188,7 +188,7 @@ function messageHtml(m,idx){
   const bubbleHtml=m.role==="assistant"?md(bodyText,{reasoningDurationMs:m.reasoning}):esc(m.text||"");
   const retryBtn=m.role==="assistant"?`<button class="msg-act-btn" data-act="retry" aria-label="Retry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 1 3 6.7"/><path d="M3 21v-6h6"/></svg></button>`:"";
   const editBtn=m.role==="user"?`<button class="msg-act-btn" data-act="edit" aria-label="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>`:"";
-  const actions=`<div class="msg-actions"><button class="msg-act-btn" data-act="copy" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg></button>${editBtn}${retryBtn}<button class="msg-act-btn danger" data-act="delete" aria-label="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button></div>`;
+  const actions=`<div class="msg-actions"><button class="msg-act-btn" data-act="copy" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg></button>${editBtn}${retryBtn}</div>`;
   return `<div class="message ${m.role}" data-idx="${idx}">${files}${tools}${reasoningHtml}<div class="bubble">${bubbleHtml}</div>${time}${actions}</div>`;
 }
 function render(){
@@ -520,11 +520,6 @@ function renderAttachments(){
   }).join("");
 }
 function removeAttachment(i){state.attachments.splice(i,1);renderAttachments()}
-function deleteMessage(idx){
-  if(idx<0||idx>=state.messages.length)return;
-  state.messages.splice(idx,1);
-  save();saveCurrentChat();render();
-}
 function editMessage(idx){
   const m=state.messages[idx];
   if(!m||m.role!=="user")return;
@@ -539,9 +534,10 @@ function editMessage(idx){
 function retryMessage(idx){
   const m=state.messages[idx];
   if(!m||m.role!=="assistant")return;
-  // Drop this answer; the preceding user turn is now the last message, so
-  // send() generates from it without appending a new prompt.
-  state.messages.splice(idx,1);
+  // Regenerating drops this answer AND everything after it — there's no
+  // branching history, so anything newer than the retried turn no longer
+  // has a valid place once the context it was generated from changes.
+  state.messages.splice(idx);
   save();saveCurrentChat();render();
   send(REGEN);
 }
@@ -1918,7 +1914,6 @@ $("chat").addEventListener("click",e=>{
       });
     }else if(act==="retry")retryMessage(idx);
     else if(act==="edit")editMessage(idx);
-    else if(act==="delete")deleteMessage(idx);
     return;
   }
   const bubble=e.target.closest(".bubble");
