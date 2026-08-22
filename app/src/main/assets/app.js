@@ -852,12 +852,11 @@ async function send(override){
       console.log("[NightCode] stream complete "+JSON.stringify({stopReason,blocks:Object.keys(blocks).length,finalLen:final.length,thinkingLen:allThinking.length}));
       const toolUses=content.filter(x=>x.type==="tool_use");
       // Hidden reasoning arrives in different shapes depending on the backend:
-      // Anthropic-style content blocks of type "thinking", or OpenAI-style
-      // choices[0].message.reasoning_content. Collect it and wrap in <think> so
-      // md() renders the collapsible reasoning block.
+      // Anthropic-style thinking already streamed into allThinking via deltas above —
+      // only OpenAI-style reasoning_content (which arrives whole, not as deltas)
+      // still needs to be picked up here, or it'd be duplicated.
       let reasoning="";
       for(const item of content){
-        if(item.type==="thinking")reasoning+=(item.thinking||item.text||"")+"\n";
         if(item.reasoning_content)reasoning+=item.reasoning_content+"\n";
       }
       const altMsg=data2.choices&&data2.choices[0]&&data2.choices[0].message;
