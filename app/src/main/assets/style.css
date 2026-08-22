@@ -84,6 +84,9 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .msg-act-btn:active{background:var(--surface-2);color:var(--text-2)}
 .msg-act-btn svg{width:13px;height:13px}
 .msg-act-btn.copied{color:#7fd6a2}
+.msg-variant-switch{display:flex;align-items:center;gap:2px;margin:4px 8px 0}
+.msg-variant-switch .msg-act-btn:disabled{opacity:.3}
+.msg-variant-count{font-size:10px;color:var(--text-3);min-width:20px;text-align:center}
 .reasoning{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--text-3);margin-bottom:8px}
 .reasoning::before{content:"";width:5px;height:5px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 0 8px rgba(124,140,255,.65)}
 

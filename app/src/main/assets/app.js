@@ -6,6 +6,11 @@ const state={
   // persisted in the Recent list. Restoring the old session here made the app
   // reopen the last chat instead of a fresh one.
   messages:[],
+  // Source of truth for branching (retry creates a sibling, not a destructive
+  // overwrite). state.messages is always a DERIVED flat view of the currently
+  // active path through this tree — see computePath(). Every mutation to the
+  // tree must recompute state.messages afterward.
+  tree:{rootId:null,nodes:{}},
   models:JSON.parse(localStorage.getItem("models")||"[]"),
   selected:localStorage.getItem("model")||"",
   base:localStorage.getItem("base")||"",
@@ -158,6 +163,12 @@ function welcomeHtml(){
     </button>
   </section>`;
 }
+function siblingInfo(m){
+  const node=state.tree.nodes[m.id];
+  const parent=node&&node.parentId?state.tree.nodes[node.parentId]:null;
+  if(!parent||parent.children.length<2)return null;
+  return {index:parent.children.indexOf(m.id)+1,total:parent.children.length};
+}
 function messageHtml(m,idx){
   const files=(m.attachments||[]).map(a=>{
     if(a.kind==="image"&&a.dataUrl)return `<div class="file-card image-card"><img src="${a.dataUrl}"><span class="file-name">${esc(a.name)}</span></div>`;
@@ -189,7 +200,13 @@ function messageHtml(m,idx){
   const retryBtn=m.role==="assistant"?`<button class="msg-act-btn" data-act="retry" aria-label="Retry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 1 3 6.7"/><path d="M3 21v-6h6"/></svg></button>`:"";
   const editBtn=m.role==="user"?`<button class="msg-act-btn" data-act="edit" aria-label="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>`:"";
   const actions=`<div class="msg-actions"><button class="msg-act-btn" data-act="copy" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg></button>${editBtn}${retryBtn}</div>`;
-  return `<div class="message ${m.role}" data-idx="${idx}">${files}${tools}${reasoningHtml}<div class="bubble">${bubbleHtml}</div>${time}${actions}</div>`;
+  const sib=siblingInfo(m);
+  const switcherHtml=sib?`<div class="msg-variant-switch" data-node="${m.id}">
+    <button class="msg-act-btn" data-act="prevVariant" ${sib.index<=1?"disabled":""} aria-label="Previous variant"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <span class="msg-variant-count">${sib.index}/${sib.total}</span>
+    <button class="msg-act-btn" data-act="nextVariant" ${sib.index>=sib.total?"disabled":""} aria-label="Next variant"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
+  </div>`:"";
+  return `<div class="message ${m.role}" data-idx="${idx}">${files}${tools}${reasoningHtml}<div class="bubble">${bubbleHtml}</div>${time}${switcherHtml}${actions}</div>`;
 }
 function render(){
   const chat=$("chat");
@@ -198,9 +215,13 @@ function render(){
     const nc=$("newChat");if(nc)nc.onclick=()=>newChat();
     return;
   }
+  const prevScrollTop=chat.scrollTop;
   chat.innerHTML=state.messages.map(messageHtml).join("");
   // Full re-render keeps the stick state: jump down only if we were at bottom.
+  // Otherwise restore where the reader was — innerHTML replacement resets
+  // scrollTop to 0, which would flash-jump to the top on every branch switch.
   if(stickToBottom)chat.scrollTop=chat.scrollHeight;
+  else chat.scrollTop=prevScrollTop;
   updateScrollBtn();
 }
 function showTyping(){
@@ -457,13 +478,21 @@ function saveCurrentChat(){
   if(!state.messages.length)return;
   const chats=getChats();
   const sid=currentSessionId();
+  const stripAttachments=a=>(a||[]).map(x=>({name:x.name,kind:x.kind}));
   const record={
     id:sid,
     title:chatTitleFrom(state.messages),
     updatedAt:Date.now(),
     summary:state.summary,
     // Strip base64/dataUrl payloads — only names/kinds survive in the list.
-    messages:state.messages.map(m=>({...m,attachments:(m.attachments||[]).map(a=>({name:a.name,kind:a.kind}))}))
+    messages:state.messages.map(m=>({...m,attachments:stripAttachments(m.attachments)})),
+    // Full branch tree, not just the active path — switching variants after
+    // reloading a saved chat needs the abandoned branches to still exist.
+    tree:{
+      rootId:state.tree.rootId,
+      nodes:Object.fromEntries(Object.entries(state.tree.nodes).map(([id,n])=>
+        [id,{...n,attachments:stripAttachments(n.attachments)}]))
+    }
   };
   const idx=chats.findIndex(c=>c.id===sid);
   if(idx>=0)chats[idx]=record;else chats.unshift(record);
@@ -476,7 +505,27 @@ function formatChatTime(ts){
 }
 function loadChat(id){
   const c=getChats().find(x=>x.id===id);if(!c)return;
-  state.messages=c.messages||[];state.summary=c.summary||"";state.attachments=[];state.lastUsage=null;
+  if(c.tree&&c.tree.nodes){
+    state.tree={rootId:c.tree.rootId,nodes:c.tree.nodes};
+  }else{
+    // Legacy chat saved before branching existed: wrap the flat list into a
+    // trivial linear tree (no branches) — lossless, computePath() reproduces
+    // the exact original order.
+    state.tree={rootId:null,nodes:{}};
+    let parentId=null;
+    for(const m of (c.messages||[])){
+      state.tree.nodes[m.id]={...m,parentId,children:[],activeChildId:null};
+      if(parentId){
+        const p=state.tree.nodes[parentId];
+        p.children.push(m.id);p.activeChildId=m.id;
+      }else{
+        state.tree.rootId=m.id;
+      }
+      parentId=m.id;
+    }
+  }
+  state.messages=computePath();
+  state.summary=c.summary||"";state.attachments=[];state.lastUsage=null;
   localStorage.setItem("currentSession",id);
   save();render();renderAttachments();renderCtxRing();
   $("closeDrawer").click();
@@ -508,10 +557,36 @@ function renderRecent(){
   }
   box.innerHTML=html;
 }
+/* ── Branching message tree ──────────
+   state.tree is the source of truth; state.messages is always recomputed
+   from it as the flat "currently active path" (parent -> activeChildId ->
+   ... until a node has none). Everything else in the app (render, send's
+   history builder, persistence, search, compaction) reads state.messages
+   and never needs to know branches exist. */
+function computePath(){
+  const {rootId,nodes}=state.tree;
+  const path=[];
+  let cur=rootId?nodes[rootId]:null;
+  while(cur){path.push(cur);cur=cur.activeChildId?nodes[cur.activeChildId]:null}
+  return path;
+}
 function addMessage(role,text,attachments=[]){
-  state.messages.push({id:crypto.randomUUID?crypto.randomUUID():String(Date.now()),role,text,attachments,ts:Date.now()});
+  const id=crypto.randomUUID?crypto.randomUUID():String(Date.now());
+  const node={id,role,text,attachments,ts:Date.now(),parentId:null,children:[],activeChildId:null};
+  const parent=state.messages[state.messages.length-1]||null;
+  state.tree.nodes[id]=node;
+  if(parent){
+    node.parentId=parent.id;
+    const parentNode=state.tree.nodes[parent.id];
+    parentNode.children.push(id);
+    parentNode.activeChildId=id;
+  }else{
+    state.tree.rootId=id;
+  }
+  state.messages=computePath();
   save();saveCurrentChat();render();
   fireExt("message",{role,text});
+  return id;
 }
 function renderAttachments(){
   $("attachments").innerHTML=state.attachments.map((a,i)=>{
@@ -524,22 +599,49 @@ function editMessage(idx){
   const m=state.messages[idx];
   if(!m||m.role!=="user")return;
   // Editing re-opens the prompt for revision: drop this turn and everything
-  // after it (the old assistant answer no longer matches), same as retry.
-  state.messages.splice(idx);
+  // after it (the old assistant answer no longer matches), same as retry
+  // used to. Unlike retry, edits don't branch yet — dead-end the active path
+  // at this node's parent so state.messages stays in sync with the tree
+  // (the trimmed nodes still exist in state.tree.nodes, just unreachable).
+  const node=state.tree.nodes[m.id];
+  if(node&&node.parentId)state.tree.nodes[node.parentId].activeChildId=null;
+  else state.tree.rootId=null;
+  state.messages=computePath();
   save();saveCurrentChat();render();
   $("input").value=m.text||"";
   resizeInput();
   $("input").focus();
 }
+function switchVariant(nodeId,direction){
+  const node=state.tree.nodes[nodeId];
+  if(!node)return;
+  if($("sendBtn").classList.contains("stop"))return; // no switching mid-stream
+  const parent=node.parentId?state.tree.nodes[node.parentId]:null;
+  if(!parent)return; // root has no siblings in this pass
+  const siblings=parent.children;
+  const newI=siblings.indexOf(nodeId)+direction;
+  if(newI<0||newI>=siblings.length)return;
+  parent.activeChildId=siblings[newI];
+  state.messages=computePath();
+  save();saveCurrentChat();render();
+}
 function retryMessage(idx){
   const m=state.messages[idx];
   if(!m||m.role!=="assistant")return;
-  // Regenerating drops this answer AND everything after it — there's no
-  // branching history, so anything newer than the retried turn no longer
-  // has a valid place once the context it was generated from changes.
-  state.messages.splice(idx);
+  const node=state.tree.nodes[m.id];
+  if(!node||!node.parentId)return;
+  const parent=state.tree.nodes[node.parentId];
+  // Create an empty sibling shell under the same parent, switch the active
+  // path to it, and let send() fill it in as the regenerated answer streams
+  // in. The old branch (this answer plus anything built on top of it) stays
+  // fully intact in state.tree.nodes — just no longer on the active path.
+  const newId=crypto.randomUUID?crypto.randomUUID():String(Date.now());
+  state.tree.nodes[newId]={id:newId,role:"assistant",text:"",attachments:[],ts:Date.now(),parentId:parent.id,children:[],activeChildId:null};
+  parent.children.push(newId);
+  parent.activeChildId=newId;
+  state.messages=computePath();
   save();saveCurrentChat();render();
-  send(REGEN);
+  send(REGEN,newId);
 }
 function openFiles(){
   if(window.Android&&Android.openFilePicker)Android.openFilePicker();
@@ -667,7 +769,20 @@ async function fetchModels(closeOnSuccess=false){
     if(closeOnSuccess)closeSheets();
   }catch(e){$("settingsError").textContent=e.message||"Refresh failed"}
 }
-async function send(override){
+// Writes a completed/partial assistant reply into an existing tree node
+// (retry's pre-created shell) instead of always appending a new one — the
+// caller passes targetId only on the retry path.
+function commitAssistantReply(text,targetId){
+  if(targetId){
+    const node=state.tree.nodes[targetId];
+    node.text=text;node.ts=Date.now();
+    state.messages=computePath();
+    return node;
+  }
+  const id=addMessage("assistant",text,[]);
+  return state.tree.nodes[id];
+}
+async function send(override,targetId){
   const input=$("input");
   const regen=override===REGEN;
   const prompt=regen?"":(typeof override==="string"?override:input.value).trim();
@@ -701,8 +816,14 @@ async function send(override){
       return s.trim();
     };
     // History: everything before the current turn, text-only (attachments were sent in their own turns).
-    const lastMsg=state.messages[state.messages.length-1];
-    const history=state.messages.slice(0,-1)
+    // A retry (regen with a targetId) leaves an empty assistant shell as the
+    // last path entry — the real prompt to regenerate from is that shell's
+    // user parent, one step further back, not state.messages' last element.
+    const lastMsg=regen&&targetId
+      ?state.messages[state.messages.length-2]
+      :state.messages[state.messages.length-1];
+    const historySlice=regen&&targetId?state.messages.slice(0,-2):state.messages.slice(0,-1);
+    const history=historySlice
       .map(m=>({role:m.role,content:strip(m.text)}))
       .filter(m=>m.content);
     const messages=[];
@@ -806,8 +927,7 @@ async function send(override){
       if(r.cancelled){
         hideLiveCard();
         const partial=final.trim();
-        addMessage("assistant",partial||"⏹ Generation stopped.",[]);
-        const lm=state.messages[state.messages.length-1];
+        const lm=commitAssistantReply(partial||"⏹ Generation stopped.",targetId);
         if(allThinking)lm.thinking=allThinking;
         lm.reasoning=Date.now()-started;save();render();
         return;
@@ -822,8 +942,7 @@ async function send(override){
         if(final||allThinking){
           hideLiveCard();
           const partial=final.trim();
-          addMessage("assistant",partial||"⚠️ Поток оборвался после размышлений (HTTP "+r.status+"). Попробуй ещё раз.",[]);
-          const lm=state.messages[state.messages.length-1];
+          const lm=commitAssistantReply(partial||"⚠️ Поток оборвался после размышлений (HTTP "+r.status+"). Попробуй ещё раз.",targetId);
           if(allThinking)lm.thinking=allThinking;
           lm.reasoning=Date.now()-started;save();render();
           return;
@@ -888,8 +1007,7 @@ async function send(override){
     // When the model burns its whole budget on thinking and returns no text,
     // surface an honest explanation instead of a dead "(empty response)" bubble.
     const finalText=final.trim()||"Модель не дала текстового ответа — возможно, лимит токенов исчерпан на размышления или тулах. Попробуй ещё раз или упрости запрос.";
-    addMessage("assistant",finalText,[]);
-    const last=state.messages[state.messages.length-1];
+    const last=commitAssistantReply(finalText,targetId);
     last.reasoning=Date.now()-started;
     if(allThinking.trim())last.thinking=allThinking.trim();
     if(toolCalls.length)last.tools=toolCalls;
@@ -901,12 +1019,11 @@ async function send(override){
     // If the model streamed any thinking/text before dying, keep it visible
     // instead of letting it vanish with the live card.
     if(typeof allThinking!=='undefined'&&allThinking||typeof final!=='undefined'&&final.trim()){
-      addMessage("assistant",(final&&final.trim())||"⚠️ "+(e.message||e),[]);
-      const lm=state.messages[state.messages.length-1];
+      const lm=commitAssistantReply((final&&final.trim())||"⚠️ "+(e.message||e),targetId);
       if(typeof allThinking!=='undefined'&&allThinking)lm.thinking=allThinking;
       lm.reasoning=Date.now()-started;save();render();
     }else{
-      addMessage("assistant","Error: "+(e.message||e));
+      commitAssistantReply("Error: "+(e.message||e),targetId);
     }
   }
   finally{$("sendBtn").classList.remove("stop");hideLiveCardSafe()}
@@ -923,7 +1040,15 @@ function compactNow(show=true){
   if(state.messages.length<8){if(show)alert("Not enough messages to compact.");return}
   const old=state.messages.slice(0,-4).map(m=>`${m.role}: ${(m.text||"").slice(0,900)}`).join("\n");
   state.summary=(state.summary+"\n"+old).slice(-12000);
-  state.messages=state.messages.slice(-4);save();render();if(show)closeSheets();
+  // Same visible effect as the old state.messages.slice(-4) truncation, but
+  // done by re-rooting the tree at the cutoff node instead of mutating the
+  // derived array directly — the trimmed-off nodes stay intact in
+  // state.tree.nodes (unreachable from the new root, not deleted).
+  const cutoff=state.messages[state.messages.length-4];
+  state.tree.nodes[cutoff.id].parentId=null;
+  state.tree.rootId=cutoff.id;
+  state.messages=computePath();
+  save();render();if(show)closeSheets();
 }
 function b64ToText(b64){
   try{
@@ -1664,7 +1789,7 @@ function currentSessionId(){
 function newChat(){
   const wasAlreadyEmpty=!state.messages.length;
   saveCurrentChat();
-  state.messages=[];state.summary="";state.attachments=[];state.lastUsage=null;save();render();renderAttachments();renderRecent();renderCtxRing();
+  state.messages=[];state.tree={rootId:null,nodes:{}};state.summary="";state.attachments=[];state.lastUsage=null;save();render();renderAttachments();renderRecent();renderCtxRing();
   localStorage.removeItem("currentSession");
   currentSessionId();
   $("input").focus();
@@ -1914,6 +2039,11 @@ $("chat").addEventListener("click",e=>{
       });
     }else if(act==="retry")retryMessage(idx);
     else if(act==="edit")editMessage(idx);
+    else if(act==="prevVariant"||act==="nextVariant"){
+      const switchEl=actBtn.closest(".msg-variant-switch");
+      const nodeId=switchEl&&switchEl.dataset.node;
+      if(nodeId)switchVariant(nodeId,act==="prevVariant"?-1:1);
+    }
     return;
   }
   const bubble=e.target.closest(".bubble");
