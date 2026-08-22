@@ -1666,10 +1666,19 @@ function currentSessionId(){
   return id;
 }
 function newChat(){
+  const wasAlreadyEmpty=!state.messages.length;
   saveCurrentChat();
   state.messages=[];state.summary="";state.attachments=[];state.lastUsage=null;save();render();renderAttachments();renderRecent();renderCtxRing();
   localStorage.removeItem("currentSession");
   currentSessionId();
+  $("input").focus();
+  // Starting a new chat from an already-empty chat changes nothing on screen —
+  // show a banner so the tap has visible feedback instead of feeling ignored.
+  if(wasAlreadyEmpty){
+    const w=$("welcome");
+    if(w)w.insertAdjacentHTML("beforeend",'<div class="sys-banner" id="sysBanner"><svg><use href="#i-check"/></svg><span>New chat started</span></div>');
+    setTimeout(()=>{const b=$("sysBanner");if(b)b.remove()},1800);
+  }
 }
 function addToProject(){
   if(!state.projects.length){
