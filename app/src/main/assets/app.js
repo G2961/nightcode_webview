@@ -2009,11 +2009,23 @@ $("input").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.pre
 initProjectState();render();renderAttachments();resizeInput();updateModelBtn();renderCtxRing();renderRecent();loadExtensions();
 
 /* ── Keyboard-aware scrolling ───────── */
-// The native WebView padding handles the layout resize; we only keep the chat
-// pinned to the latest message when the viewport shrinks (keyboard opening).
+// The native WebView padding handles the layout resize itself (shrinks
+// .chat's clientHeight when the keyboard opens). If we're stuck to bottom,
+// just re-pin to the latest message. Otherwise .chat's visible height
+// shrinks around the reader's current position without moving scrollTop —
+// whatever they were reading at the bottom edge gets covered by the
+// keyboard/composer. Track the last known clientHeight and shift scrollTop
+// by the delta so the same content stays in view.
+let lastChatClientHeight=null;
 function syncKeyboard(){
-  // Native insets handle the layout; only pin the chat if we're stuck to bottom.
-  if(stickToBottom)scrollToBottom(false);
+  const c=$("chat");
+  if(!c)return;
+  if(stickToBottom){scrollToBottom(false);lastChatClientHeight=c.clientHeight;return}
+  if(lastChatClientHeight!=null){
+    const delta=lastChatClientHeight-c.clientHeight;
+    if(delta>0)c.scrollTop=c.scrollTop+delta;
+  }
+  lastChatClientHeight=c.clientHeight;
 }
 window.visualViewport&&window.visualViewport.addEventListener("resize",syncKeyboard);
 window.addEventListener("resize",syncKeyboard);
