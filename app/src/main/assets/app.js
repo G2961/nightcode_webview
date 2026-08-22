@@ -1,5 +1,6 @@
 const $=id=>document.getElementById(id);
 const REGEN=Symbol("regen");
+let lastChatClientHeight=null;
 const state={
   // A fresh app launch always starts a NEW chat; the previous one is already
   // persisted in the Recent list. Restoring the old session here made the app
@@ -2007,6 +2008,7 @@ $("input").addEventListener("input",updateSlashMenu)
 $("input").addEventListener("keydown",e=>{if(e.key==="Escape"){$("slashMenu").classList.remove("show")}})
 $("input").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}})
 initProjectState();render();renderAttachments();resizeInput();updateModelBtn();renderCtxRing();renderRecent();loadExtensions();
+{const c=$("chat");if(c)lastChatClientHeight=c.clientHeight}
 
 /* ── Keyboard-aware scrolling ───────── */
 // The native WebView padding handles the layout resize itself (shrinks
@@ -2014,9 +2016,9 @@ initProjectState();render();renderAttachments();resizeInput();updateModelBtn();r
 // just re-pin to the latest message. Otherwise .chat's visible height
 // shrinks around the reader's current position without moving scrollTop —
 // whatever they were reading at the bottom edge gets covered by the
-// keyboard/composer. Track the last known clientHeight and shift scrollTop
+// keyboard/composer. Track the last known clientHeight (declared near the
+// top of the file, initialized once .chat first exists) and shift scrollTop
 // by the delta so the same content stays in view.
-let lastChatClientHeight=null;
 function syncKeyboard(){
   const c=$("chat");
   if(!c)return;
@@ -2029,6 +2031,10 @@ function syncKeyboard(){
 }
 window.visualViewport&&window.visualViewport.addEventListener("resize",syncKeyboard);
 window.addEventListener("resize",syncKeyboard);
+// Called directly from Kotlin right after the --sys-ime CSS var is applied —
+// CSS var writes don't reliably fire the browser resize events above, which
+// is why compensation used to only kick in on the second keyboard toggle.
+window.__syncKeyboard=syncKeyboard;
 // Lock the page pan dead. Native scrolling is allowed ONLY when the touch
 // started inside an element that can actually scroll right now (chat feed,
 // sheets, code blocks, an overflowing textarea). Everything else — especially

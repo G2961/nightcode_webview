@@ -189,7 +189,13 @@ class MainActivity : ComponentActivity() {
         webView.evaluateJavascript(
             "document.documentElement.style.setProperty('--sys-status','${cssStatus}px');" +
                 "document.documentElement.style.setProperty('--sys-nav','${cssNav}px');" +
-                "document.documentElement.style.setProperty('--sys-ime','${cssIme}px');",
+                "document.documentElement.style.setProperty('--sys-ime','${cssIme}px');" +
+                // CSS var writes don't reliably fire resize/visualViewport events in
+                // this WebView, which is why keyboard-open scroll compensation only
+                // ever kicked in on the SECOND toggle. Nudge it directly, after the
+                // new inset has actually been applied to layout (two rAFs: one for
+                // style recalc, one for the resulting reflow).
+                "requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__syncKeyboard&&window.__syncKeyboard()}));",
             null
         )
     }
