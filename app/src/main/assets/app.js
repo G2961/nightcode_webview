@@ -140,10 +140,9 @@ function welcomeHtml(){
   return `<section id="welcome" class="welcome">
     <div class="star"><svg><use href="#i-moon"/></svg></div>
     <h1>Hello, night owl</h1>
-    <p>Your local AI coding workspace</p>
     <button class="quick" id="newChat">
       <span class="quick-ico"><svg><use href="#i-plus"/></svg></span>
-      <span class="quick-text"><b>New chat</b><small>Start a fresh conversation</small></span>
+      <span class="quick-text"><b>New chat</b></span>
       <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
     </button>
     <button class="quick" id="openProjectCard">
@@ -417,14 +416,28 @@ function setChats(chats){
     while(chats.length>1){chats.pop();try{localStorage.setItem("chats",JSON.stringify(chats));return}catch(_){}}
   }
 }
+/* Skip generic greeting-only openers when picking the chat title — "привет"
+   repeated across every chat isn't useful for finding a chat by eyeballing. */
+const GREETING_RE=/^(привет|здравствуй\w*|хай|hi|hello|hey|yo)[\s.,!?]*$/i;
+function chatTitleFrom(msgs){
+  const userMsgs=msgs.filter(m=>m.role==="user"&&m.text&&m.text.trim());
+  let src=userMsgs[0];
+  if(src&&GREETING_RE.test(src.text.trim())&&userMsgs[1])src=userMsgs[1];
+  let t=String((src||{}).text||"Chat").replace(/[\n\r]+/g," ").trim();
+  if(t.length>44){
+    const cut=t.slice(0,44);
+    const lastSpace=cut.lastIndexOf(" ");
+    t=(lastSpace>20?cut.slice(0,lastSpace):cut).trim()+"…";
+  }
+  return t;
+}
 function saveCurrentChat(){
   if(!state.messages.length)return;
   const chats=getChats();
   const sid=currentSessionId();
-  const firstUser=(state.messages.find(m=>m.role==="user")||{}).text||"Chat";
   const record={
     id:sid,
-    title:String(firstUser).replace(/[\n\r]+/g," ").slice(0,48),
+    title:chatTitleFrom(state.messages),
     updatedAt:Date.now(),
     summary:state.summary,
     // Strip base64/dataUrl payloads — only names/kinds survive in the list.
@@ -1434,6 +1447,10 @@ function setConsoleTab(tab){
   $("consolePrompt").textContent=tab==="js"?"js>":shellPrompt();
   $("consoleInput").placeholder=tab==="js"?"expression (Enter to eval)":"help";
   if(tab==="logs")renderLogs();
+  else if(!$("consoleOut").children.length)coEmptyState(tab);
+}
+function coEmptyState(tab){
+  coPrint(tab==="js"?"JS REPL — evaluate expressions against the page context. Try `1+1`.":"Shell — runs on the connected folder. Try `help` or `ls`.","co-dim");
 }
 function updateConsoleInfo(){
   const el=$("consoleInfo");
@@ -1443,10 +1460,6 @@ function openConsole(){
   openSheet("consoleSheet");
   updateConsoleInfo();
   setConsoleTab(CON.tab);
-  if(!CON.welcomed){
-    CON.welcomed=true;
-    coPrint("NightCode console — the shell runs on the connected folder; try `help`","co-dim");
-  }
   setTimeout(()=>{try{$("consoleInput").focus()}catch(e){}},250);
 }
 
@@ -1733,7 +1746,7 @@ $("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.ba
 $("consoleBtn").onclick=openConsole;
 $("consoleClose").onclick=closeSheets;
 $("consoleClear").onclick=()=>{
-  if(CON.tab==="logs"){LOGBUF.length=0;renderLogs()}else{$("consoleOut").innerHTML=""}
+  if(CON.tab==="logs"){LOGBUF.length=0;renderLogs()}else{$("consoleOut").innerHTML="";coEmptyState(CON.tab)}
 };
 document.querySelectorAll(".ctab").forEach(b=>b.onclick=()=>setConsoleTab(b.dataset.ctab));
 $("consoleInput").addEventListener("keydown",e=>{

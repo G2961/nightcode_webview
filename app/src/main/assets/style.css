@@ -342,14 +342,14 @@ code.inline-code{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,
 @keyframes ncspin{to{transform:rotate(360deg)}}
 
 /* ── Console (Shell / JS / Logs) ─────── */
-.sheet.console-sheet{height:86vh;max-height:none;display:flex;flex-direction:column;padding:10px 12px 12px;overflow:hidden}
+.sheet.console-sheet{top:calc(24px + var(--sys-status,0px));height:auto;max-height:none;display:flex;flex-direction:column;padding:10px 12px 12px;overflow:hidden}
 .console-tabs{display:flex;align-items:center;gap:4px;margin-bottom:8px;flex-shrink:0}
 .ctab{padding:7px 12px;border-radius:10px;font-size:12px;font-weight:600;color:var(--text-2);transition:background .15s,color .15s}
 .ctab.active{background:var(--surface-3);color:#fff}
 .console-info{margin-left:auto;font-size:10px;color:var(--text-3);max-width:28vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .console-tabs .icon-btn{width:32px;height:32px;border-radius:9px;flex:0 0 auto}
 .console-tabs .icon-btn svg{width:15px;height:15px}
-.console-out{flex:1;overflow-y:auto;overscroll-behavior:contain;background:#0a0c10;border:1px solid #1e222b;border-radius:12px;padding:10px 11px;font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;-webkit-overflow-scrolling:touch}
+.console-out{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;background:#0a0c10;border:1px solid #1e222b;border-radius:12px;padding:10px 11px;font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;-webkit-overflow-scrolling:touch}
 .console-out::-webkit-scrollbar{width:0}
 .co-line{white-space:pre-wrap;overflow-wrap:anywhere;color:#b9c2d0;margin:0 0 1px}
 .co-cmd{color:#8ea0ff;margin-top:5px}
