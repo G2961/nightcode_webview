@@ -361,6 +361,32 @@ function httpFetch(method,url,headers={},body){
   });
 }
 
+/* ── SSH bridge (native, via JSch in MainActivity) ── */
+const sshCbs={};let sshCbId=0;
+window.__sshResult=function(cbId,payloadJson){
+  const cb=sshCbs[cbId];if(!cb)return;
+  delete sshCbs[cbId];
+  let parsed;
+  try{parsed=JSON.parse(payloadJson)}catch(e){parsed={code:-1,stdout:"",stderr:"",error:true,message:"bad payload from bridge"}}
+  cb(parsed);
+};
+function sshExec(hostAlias,command,timeoutMs=60000){
+  return new Promise(resolve=>{
+    if(!window.Android||!Android.sshExec){resolve({code:-1,stdout:"",stderr:"",error:true,message:"SSH is only available in the Android app."});return}
+    const cbId="ssh"+(++sshCbId);
+    sshCbs[cbId]=resolve;
+    try{Android.sshExec(hostAlias,command,timeoutMs,cbId)}
+    catch(e){delete sshCbs[cbId];resolve({code:-1,stdout:"",stderr:"",error:true,message:String(e&&e.message||e)})}
+  });
+}
+async function sshListHosts(){
+  // sshListHosts reports back through the fs bridge (window.__fsResult), same
+  // as other read-only Android calls — reuse fsCall instead of the ssh callback map.
+  const r=await fsCall("sshListHosts");
+  if(r.error)return [];
+  try{return JSON.parse(r.result)}catch(e){return []}
+}
+
 /* ── Android filesystem bridge ─────── */
 const fsCbs={};let fsCbId=0;
 window.__fsResult=function(cbId,result,error){
@@ -835,10 +861,12 @@ async function send(override,targetId){
     messages.push({role:"user",content:regen?buildUserContent(lastMsg.text,lastMsg.attachments||[]):buildUserContent(prompt,at)});
     const proj=hasProject();
     const ws=hasWorkspace();
+    const sshNote=(proj||ws)?" You may also have ssh_exec/ssh_list_hosts tools for running commands on remote servers over SSH, configured via an ssh_hosts.txt file the user maintains — only use these when the user's request actually involves a remote server, never proactively, and never invent a host alias (call ssh_list_hosts first if unsure)."
+      :"";
     const system=(proj
-      ?"You are NightCode, a local AI coding agent. You have tools to inspect and edit the user's selected project, but do NOT use them proactively — only call a tool when the user's message actually asks for something that requires it (reading, writing, searching, running code). A greeting or general question gets a plain reply with no tool calls. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded. Use web_search whenever fresh information would help (docs, versions, errors)."
+      ?"You are NightCode, a local AI coding agent. You have tools to inspect and edit the user's selected project, but do NOT use them proactively — only call a tool when the user's message actually asks for something that requires it (reading, writing, searching, running code)."+sshNote+" A greeting or general question gets a plain reply with no tool calls. Be concise. Inspect files before changing them. Use write_file for actual edits. Do not claim a change was made unless the tool succeeded. Use web_search whenever fresh information would help (docs, versions, errors)."
       :ws
-      ?"You are NightCode, a local AI coding agent. No project is currently open, but a projects folder is connected — do NOT use file tools proactively, only when the user's message actually asks for it. If the user asks you to build/create something new, first call create_directory with a short kebab-case name for the new project (e.g. \"my-app\"), then create all its files as paths INSIDE that directory (e.g. \"my-app/index.html\") — never write files directly at the root. If the user instead refers to continuing/opening an existing project, tell them to pick it from Projects in the menu; you cannot switch projects yourself. Be concise. Use web_search whenever fresh information would help."
+      ?"You are NightCode, a local AI coding agent. No project is currently open, but a projects folder is connected — do NOT use file tools proactively, only when the user's message actually asks for it."+sshNote+" If the user asks you to build/create something new, first call create_directory with a short kebab-case name for the new project (e.g. \"my-app\"), then create all its files as paths INSIDE that directory (e.g. \"my-app/index.html\") — never write files directly at the root. If the user instead refers to continuing/opening an existing project, tell them to pick it from Projects in the menu; you cannot switch projects yourself. Be concise. Use web_search whenever fresh information would help."
       :"You are NightCode, a helpful AI assistant. There is no project folder connected, so do not assume access to local files. You have the web_search tool — use it only when the user's question actually needs current information; do not search proactively on greetings or general chat. Cite source URLs when you do search.")
       +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
     let final="";const toolCalls=[];let allThinking="";
@@ -878,7 +906,10 @@ async function send(override,targetId){
       // workspace folder (so the model can create a new project inside it).
       const webTools=(state.searchProvider!=="free"&&state.ollamaKey)?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
       // Extension tools ride along in every mode — they may not need a project.
-      body.tools=[...((proj||hasWorkspace())?FILE_TOOLS:[]),...webTools,...extToolDefs()];
+      // SSH tools are offered whenever a hosts file could plausibly exist (a
+      // project or workspace is connected) — sshExec itself reports HOST_NOT_FOUND
+      // if ssh_hosts.txt is missing or the alias isn't in it.
+      body.tools=[...((proj||hasWorkspace())?FILE_TOOLS:[]),...((proj||hasWorkspace())?SSH_TOOLS:[]),...webTools,...extToolDefs()];
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
       // Full SSE parser: collects thinking, text AND tool_use blocks straight from
       // the stream (content_block_start carries id/name, input_json_delta carries
@@ -1087,6 +1118,10 @@ const FILE_TOOLS=[
   {name:"rename_file",description:"Rename or move a file within the project.",input_schema:{type:"object",properties:{from:{type:"string"},to:{type:"string"}},required:["from","to"]}},
   {name:"delete_file",description:"Delete a file from the project. Only use when the user explicitly asks for deletion.",input_schema:{type:"object",properties:{path:{type:"string"}},required:["path"]}}
 ];
+const SSH_TOOLS=[
+  {name:"ssh_list_hosts",description:"List SSH host aliases configured in ssh_hosts.txt (no secrets returned — alias, user, ip, port, auth type only). Call this first if you don't know which alias to use.",input_schema:{type:"object",properties:{},required:[]}},
+  {name:"ssh_exec",description:"Run a shell command on a remote server over SSH, using credentials from ssh_hosts.txt. Pass the host's alias (not its IP) — look it up with ssh_list_hosts if unsure. Returns exit code, stdout and stderr.",input_schema:{type:"object",properties:{host:{type:"string",description:"Host alias as defined in ssh_hosts.txt"},command:{type:"string",description:"Shell command to execute on the remote host"}},required:["host","command"]}}
+];
 const WEB_SEARCH_TOOL={name:"web_search",description:"Search the web for current information: documentation, recent events, library APIs, error messages. Returns titles, snippets and URLs.",input_schema:{type:"object",properties:{query:{type:"string",description:"Search query"}},required:["query"]}};
 const WEB_FETCH_TOOL={name:"web_fetch",description:"Fetch a web page by URL and return its main text content. Use after web_search to read a promising result in full before answering.",input_schema:{type:"object",properties:{url:{type:"string",description:"Full URL including https://"}},required:["url"]}};
 
@@ -1285,6 +1320,23 @@ async function runTool(name,input){
   if(name==="create_directory")return fsCall("fsMkdir",input.path);
   if(name==="rename_file")return fsCall("fsRename",input.from,input.to);
   if(name==="delete_file")return fsCall("fsDelete",input.path);
+  if(name==="ssh_list_hosts"){
+    const hosts=await sshListHosts();
+    if(!hosts.length)return {result:"NO_HOSTS: ssh_hosts.txt not found or empty in project/workspace root.",error:true};
+    return {result:JSON.stringify(hosts,null,2),error:false};
+  }
+  if(name==="ssh_exec"){
+    const host=String(input.host||"").trim();
+    const command=String(input.command||"");
+    if(!host)return {result:"MISSING_HOST",error:true};
+    if(!command)return {result:"MISSING_COMMAND",error:true};
+    const r=await sshExec(host,command,90000);
+    if(r.error)return {result:"SSH_ERROR: "+r.message,error:true};
+    const parts=["exit code: "+r.code];
+    if(r.stdout)parts.push("stdout:\n"+r.stdout.slice(0,8000));
+    if(r.stderr)parts.push("stderr:\n"+r.stderr.slice(0,4000));
+    return {result:parts.join("\n\n"),error:r.code!==0};
+  }
   return {result:"UNKNOWN_TOOL",error:true};
 }
 function hasProject(){
@@ -1829,11 +1881,13 @@ function toolIcon(name){
     delete_file:'<path d="M5 7h14M9 7V4h6v3M8 10v7M12 10v7M16 10v7M6 7l1 13h10l1-13"/>',
     web_search:'<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5S14.6 18.2 12 20.5c-2.6-2.3-3.9-5.2-3.9-8.5S9.4 5.8 12 3.5z"/>',
     web_fetch:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/>',
+    ssh_exec:'<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="m7 9 3 3-3 3M13 15h4"/>',
+    ssh_list_hosts:'<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M7 9h.01M7 12h.01M7 15h.01M11 9h6M11 12h6M11 15h6"/>',
     __ext:'<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M16.5 13.5v6M13.5 16.5h6"/>'
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.__ext)+'</svg>';
 }
-function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page'}[name]||String(name||'').replace(/_/g,' '))}
+function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page',ssh_exec:'Running SSH command',ssh_list_hosts:'Listing SSH hosts'}[name]||String(name||'').replace(/_/g,' '))}
 /* Claude-style one-line labels: past tense + target, e.g. Searched "query" */
 function toolCompactLabel(t){
   const target=toolTarget(t.input)||"";
@@ -1848,13 +1902,15 @@ function toolCompactLabel(t){
     create_directory:'Created '+short,
     rename_file:'Renamed to '+short,
     delete_file:'Deleted '+short,
-    get_file_info:'Inspected '+short
+    get_file_info:'Inspected '+short,
+    ssh_exec:'Ran command on '+(t.input?.host||short),
+    ssh_list_hosts:'Listed SSH hosts'
   };
   let label=map[t.name]||toolLabel(t.name);
   if(t.error)label+=" — failed";
   return label;
 }
-function toolTarget(input){return input?.path||input?.to||input?.query||input?.url||input?.url||''}
+function toolTarget(input){return input?.path||input?.to||input?.query||input?.url||input?.host||input?.command||''}
 function makeTree(text){
   // Root-level view only: directories first, then files. No recursive branches.
   const lines=String(text||"").split("\n").filter(Boolean);
@@ -1881,300 +1937,4 @@ function toolPreview(name,input,result){
   return '<pre>'+esc(out.slice(0,5000))+"</pre>";
 }
 function showToolActivity(name,input){
-  const chat=$("chat");
-  removeTyping();
-  const wrap=document.createElement("div");wrap.className="message assistant";
-  const card=document.createElement("div");card.className="tool-activity compact";
-  card.innerHTML='<div class="tool-activity-head"><div class="tool-activity-icon sm">'+toolIcon(name)+'</div><div class="tool-activity-text"><div class="tool-activity-title">'+esc(toolCompactLabel({name,input}))+'</div></div><div class="tool-activity-status"><span class="tool-spinner"></span></div></div><div class="tool-preview" style="display:none"></div>';
-  wrap.appendChild(card);chat.appendChild(wrap);autoScroll();
-  return {update(result,error=false){
-    card.querySelector(".tool-preview").innerHTML=toolPreview(name,input,result);
-    card.querySelector(".tool-preview").style.display="";
-    card.classList.add("done");
-    const st=card.querySelector(".tool-activity-status");
-    st.innerHTML=error?'<span style="color:#ff7279">✕</span>':'<svg style="width:14px;height:14px;color:#7fd6a2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>';
-    if(error)card.querySelector(".tool-activity-icon").style.color="#ff7279";
-    autoScroll();
-  }};
-}
-
-$("menuBtn").onclick=()=>{renderRecent();$("drawer").classList.add("open");$("scrim").classList.add("open")}
-$("closeDrawer").onclick=()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")}
-$("scrim").onclick=()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")}
-$("drawerNew").onclick=()=>{newChat();$("closeDrawer").click()}
-$("drawerConsole").onclick=()=>{$("closeDrawer").click();openConsole()}
-$("addBtn").onclick=()=>openSheet("addSheet")
-$("rowProjectFolder").onclick=()=>{closeSheets();openProjectsSheet()}
-$("rowWebSearch").onclick=()=>{closeSheets();$("input").focus()}
-$("rowAddToProject").onclick=()=>{closeSheets();addToProject()}
-$("rowToolAccess").onclick=()=>{closeSheets();openSheet("contextSheet")}
-async function openProjectsSheet(){
-  openSheet("projectsSheet");
-  const hasWs=!!(window.Android&&Android.hasWorkspace&&Android.hasWorkspace());
-  $("projectsWsSetup").style.display=hasWs?"none":"";
-  $("projectsWsBody").style.display=hasWs?"":"none";
-  if(!hasWs)return;
-  const list=$("projectsList");
-  list.innerHTML='<div class="ext-empty">Loading…</div>';
-  const names=await listWorkspaceProjects();
-  if(!names.length){list.innerHTML='<div class="ext-empty">No projects yet — create one above.</div>';return}
-  list.innerHTML=names.map(n=>`<button class="recent-chat project-row ${n===state.projectName?"active":""}" data-project="${esc(n)}">
-    <span class="chat-dot"></span>
-    <span class="recent-chat-main"><span class="recent-chat-title">${esc(n)}</span></span>
-    ${n===state.projectName?'<span class="row-arrow"><svg><use href="#i-check"/></svg></span>':""}
-  </button>`).join("");
-}
-document.addEventListener("click",e=>{const card=e.target.closest("#openProjectCard");if(card)openProjectsSheet()});
-document.addEventListener("click",e=>{
-  const row=e.target.closest(".project-row");
-  if(row){switchWorkspaceProject(row.dataset.project).then(()=>closeSheets());return}
-});
-$("projectsPickWs").onclick=()=>{if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();else alert("Available in the Android app.")}
-$("projectsOtherFolder").onclick=()=>{closeSheets();openProject()}
-async function createProjectFromInput(){
-  const input=$("newProjectName");
-  const name=input.value.trim();
-  if(!name)return;
-  if(!/^[\w.-]+$/.test(name)){alert("Use letters, numbers, - or _ only.");return}
-  const btn=$("newProjectBtn");btn.disabled=true;
-  const r=await createWorkspaceProject(name);
-  btn.disabled=false;
-  if(!r.ok){alert("Couldn't create project: "+r.error);return}
-  input.value="";
-  closeSheets();
-}
-$("newProjectBtn").onclick=createProjectFromInput;
-$("newProjectName").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();createProjectFromInput()}});
-$("modelBtn").onclick=()=>{openSheet("modelSheet");renderModels()}
-$("moreBtn").onclick=()=>{openSheet("settingsSheet");$("baseUrl").value=state.base;$("apiKey").value=state.key;updateSearchUI();updateWorkspaceUI()}
-/* Console & extensions wiring */
-$("consoleClose").onclick=closeSheets;
-$("consoleClear").onclick=()=>{
-  if(CON.tab==="logs"){LOGBUF.length=0;renderLogs()}else{$("consoleOut").innerHTML="";coEmptyState(CON.tab)}
-};
-document.querySelectorAll(".ctab").forEach(b=>b.onclick=()=>setConsoleTab(b.dataset.ctab));
-$("consoleInput").addEventListener("keydown",e=>{
-  const inp=e.target;
-  const hist=CON.hist[CON.tab];
-  if(e.key==="Enter"){
-    const v=inp.value;inp.value="";
-    if(CON.tab==="shell")runShellLine(v);else runJsLine(v);
-  }else if(e.key==="ArrowUp"){
-    if(!hist||!hist.length)return;
-    e.preventDefault();
-    if(CON.hi[CON.tab]<0)CON.hi[CON.tab]=hist.length;
-    CON.hi[CON.tab]=Math.max(0,CON.hi[CON.tab]-1);
-    inp.value=hist[CON.hi[CON.tab]]||"";
-  }else if(e.key==="ArrowDown"){
-    if(!hist||CON.hi[CON.tab]<0)return;
-    e.preventDefault();
-    CON.hi[CON.tab]=Math.min(hist.length,CON.hi[CON.tab]+1);
-    inp.value=hist[CON.hi[CON.tab]]||"";
-    if(CON.hi[CON.tab]>=hist.length)CON.hi[CON.tab]=-1;
-  }
-});
-$("extBtn").onclick=()=>{openSheet("extSheet");renderExtList()};
-$("extReload").onclick=async()=>{const b=$("extReload");b.disabled=true;await loadExtensions();b.disabled=false};
-$("extAddInline").onclick=()=>{
-  const ta=$("extInlineSrc");
-  if(!ta.value.trim())return;
-  state.extInline.push(ta.value);save();ta.value="";
-  loadExtensions();
-};
-function updateSearchUI(){
-  const sel=$("searchProviderSel");if(!sel)return;
-  sel.value=state.searchProvider;
-  const st=$("keyStatus");if(!st)return;
-  st.className="key-status";
-  const ollamaOn=state.searchProvider==="ollama"||(state.searchProvider==="auto"&&state.ollamaKey);
-  if(state.searchProvider==="free")st.textContent="Free search (Bing / Google News)";
-  else if(!state.ollamaKey)st.textContent="Enter your Ollama API key";
-  else if(state._ollamaVerified){st.className="key-status ok";st.textContent="Ollama search ✓ active"}
-  else st.textContent="Key saved — press Check key";
-}
-/* Quick key check: a 1-result search. Auto-runs on toggle/entry, manual button too. */
-async function verifyOllamaKey(){
-  const st=$("keyStatus");
-  if(!st)return;
-  if(!state.ollamaKey){st.className="key-status";st.textContent="Enter your Ollama API key";return}
-  st.className="key-status checking";st.textContent="Checking key…";
-  const btn=$("verifyOllamaBtn");if(btn)btn.disabled=true;
-  const r=await ollamaApi("web_search",{query:"test",max_results:1});
-  if(btn)btn.disabled=false;
-  state._ollamaVerified=false;
-  if(!r.error&&r.status>=200&&r.status<300){
-    state._ollamaVerified=true;
-    st.className="key-status ok";st.textContent="Ollama search ✓ active";
-  }else if(r.status===401||r.status===403){
-    st.className="key-status bad";st.textContent="Key invalid — get one at ollama.com/settings/keys";
-  }else if(r.error){
-    st.className="key-status bad";st.textContent="Network error: "+String(r.body||"").slice(0,80);
-  }else{
-    st.className="key-status bad";st.textContent="Key check failed (HTTP "+r.status+")";
-  }
-}
-$("searchProviderSel").onchange=e=>{state.searchProvider=e.target.value;save();updateSearchUI()}
-$("chatSearch").addEventListener("input",renderRecent)
-$("chat").addEventListener("click",e=>{
-  const copyBtn=e.target.closest(".code-copy-btn");
-  if(copyBtn){
-    const code=decodeURIComponent(copyBtn.dataset.code||"");
-    copyToClipboard(code).then(ok=>{
-      copyBtn.classList.toggle("copied",ok);
-      setTimeout(()=>copyBtn.classList.remove("copied"),1400);
-    });
-    return;
-  }
-  const actBtn=e.target.closest(".msg-act-btn");
-  if(actBtn){
-    const msgEl=actBtn.closest(".message");
-    const idx=Number(msgEl&&msgEl.dataset.idx);
-    if(Number.isNaN(idx))return;
-    const act=actBtn.dataset.act;
-    if(act==="copy"){
-      const m=state.messages[idx];
-      copyToClipboard(m&&m.text||"").then(ok=>{
-        actBtn.classList.toggle("copied",ok);
-        setTimeout(()=>actBtn.classList.remove("copied"),1400);
-      });
-    }else if(act==="retry")retryMessage(idx);
-    else if(act==="edit")editMessage(idx);
-    else if(act==="prevVariant"||act==="nextVariant"){
-      const switchEl=actBtn.closest(".msg-variant-switch");
-      const nodeId=switchEl&&switchEl.dataset.node;
-      if(nodeId)switchVariant(nodeId,act==="prevVariant"?-1:1);
-    }
-    return;
-  }
-  const bubble=e.target.closest(".bubble");
-  if(bubble){
-    const msgEl=bubble.closest(".message");
-    if(msgEl){
-      const wasOpen=msgEl.classList.contains("acted");
-      document.querySelectorAll(".message.acted").forEach(el=>el.classList.remove("acted"));
-      if(!wasOpen)msgEl.classList.add("acted");
-    }
-  }
-});
-$("ollamaKeyInput").addEventListener("input",e=>{
-  state.ollamaKey=e.target.value.trim();save();
-});
-$("ollamaKeyInput").addEventListener("change",e=>{
-  if(state.ollamaKey)verifyOllamaKey();else updateSearchUI();
-});
-$("saveKeyBtn").onclick=()=>{
-  // Save only — no network check. For when the tester/API is flaky.
-  state.ollamaKey=$("ollamaKeyInput").value.trim();save();
-  state._ollamaVerified=false;
-  const st=$("keyStatus");
-  if(st){
-    st.className="key-status ok";
-    st.textContent=state.ollamaKey?"Key saved ✓":(state.searchProvider==="free"?"Free search (Bing / Google News)":"No key — free search");
-  }
-};
-$("verifyOllamaBtn").onclick=verifyOllamaKey;
-$("wsEnabled").onchange=e=>{state.wsEnabled=e.target.checked;save();updateWorkspaceUI()}
-$("wsPick").onclick=()=>{if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();else alert("Available in the Android app.")}
-$("wsClear").onclick=()=>{if(window.Android&&Android.clearWorkspace){Android.clearWorkspace()}state.wsEnabled=false;state.projectName=(window.Android&&Android.hasProject&&Android.hasProject())?Android.getProjectName():"";save();updateWorkspaceUI();render()}
-$("saveSettings").onclick=async()=>{
-  state.base=$("baseUrl").value.trim();state.key=$("apiKey").value.trim();save();
-  const btn=$("saveSettings");btn.disabled=true;const label=btn.textContent;btn.textContent="Saving…";
-  try{await fetchModels(true)}finally{btn.disabled=false;btn.textContent=label}
-}
-$("refreshModels").onclick=()=>fetchModels()
-$("sheetScrim").onclick=closeSheets
-$("contextBtn").onclick=()=>{
-  openSheet("contextSheet");
-  const lim=getCtxLimits();
-  $("inputTokens").value=lim.input;$("outputTokens").value=lim.output;
-  $("autoCompact").checked=state.settings.auto;$("threshold").value=state.settings.threshold;
-  $("perModelCtx").checked=isModelOverridden();
-  renderUsagePanel();
-  const note=$("ctxModelNote");
-  if(note){
-    note.textContent=isModelOverridden()
-      ?"Per-model settings: "+(state.selected||"unknown")
-      :"Global defaults (all models) — "+(state.selected?"current: "+state.selected:"no model selected");
-    note.classList.toggle("on",isModelOverridden());
-  }
-}
-$("perModelCtx").onchange=e=>{
-  const note=$("ctxModelNote");
-  if(note){
-    note.textContent=e.target.checked
-      ?"Per-model settings: "+(state.selected||"unknown")
-      :"Global defaults (all models) — "+(state.selected?"current: "+state.selected:"no model selected");
-    note.classList.toggle("on",e.target.checked);
-  }
-}
-$("saveContext").onclick=()=>{
-  const input=Number($("inputTokens").value)||128000;
-  const output=Number($("outputTokens").value)||6000;
-  if($("perModelCtx").checked&&state.selected){
-    if(!state.modelContext)state.modelContext={};
-    state.modelContext[state.selected]={input,output};
-  }else{
-    state.settings.input=input;
-    state.settings.output=output;
-    if(state.selected&&state.modelContext&&state.modelContext[state.selected])delete state.modelContext[state.selected];
-  }
-  state.settings.auto=$("autoCompact").checked;
-  state.settings.threshold=Number($("threshold").value)||80;
-  save();renderCtxRing();closeSheets();
-}
-$("compactNow").onclick=()=>compactNow(true)
-$("ctxRingBtn").onclick=()=>$("contextBtn").onclick()
-$("sendBtn").onclick=()=>{
-  if($("sendBtn").classList.contains("stop")){cancelActiveStream();return}
-  send();
-}
-$("input").addEventListener("input",resizeInput)
-$("input").addEventListener("input",updateSlashMenu)
-$("input").addEventListener("keydown",e=>{if(e.key==="Escape"){$("slashMenu").classList.remove("show")}})
-$("input").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}})
-initProjectState();render();renderAttachments();resizeInput();updateModelBtn();renderCtxRing();renderRecent();loadExtensions();
-{const c=$("chat");if(c)lastChatClientHeight=c.clientHeight}
-
-/* ── Keyboard-aware scrolling ───────── */
-// The native WebView padding handles the layout resize itself (shrinks
-// .chat's clientHeight when the keyboard opens). If we're stuck to bottom,
-// just re-pin to the latest message. Otherwise .chat's visible height
-// shrinks around the reader's current position without moving scrollTop —
-// whatever they were reading at the bottom edge gets covered by the
-// keyboard/composer. Track the last known clientHeight (declared near the
-// top of the file, initialized once .chat first exists) and shift scrollTop
-// by the delta so the same content stays in view.
-function syncKeyboard(){
-  const c=$("chat");
-  if(!c)return;
-  if(stickToBottom){scrollToBottom(false);lastChatClientHeight=c.clientHeight;return}
-  if(lastChatClientHeight!=null){
-    const delta=lastChatClientHeight-c.clientHeight;
-    if(delta>0)c.scrollTop=c.scrollTop+delta;
-  }
-  lastChatClientHeight=c.clientHeight;
-}
-window.visualViewport&&window.visualViewport.addEventListener("resize",syncKeyboard);
-window.addEventListener("resize",syncKeyboard);
-// Called directly from Kotlin right after the --sys-ime CSS var is applied —
-// CSS var writes don't reliably fire the browser resize events above, which
-// is why compensation used to only kick in on the second keyboard toggle.
-window.__syncKeyboard=syncKeyboard;
-// Lock the page pan dead. Native scrolling is allowed ONLY when the touch
-// started inside an element that can actually scroll right now (chat feed,
-// sheets, code blocks, an overflowing textarea). Everything else — especially
-// the composer and its textarea — stays glued in place.
-const SCROLLABLE=".chat,.sheet,#recent,.console-out,textarea,pre";
-document.addEventListener("touchmove",e=>{
-  let el=e.target;
-  while(el&&el!==document.body){
-    if(el.matches&&el.matches(SCROLLABLE)){
-      const cs=getComputedStyle(el);
-      if(cs.overflowY==="auto"||cs.overflowY==="scroll"){
-        if(el.scrollHeight>el.clientHeight+4)return;  // it really can scroll
-      }
-    }
-    el=el.parentElement;
-  }
-  e.preventDefault();
-},{passive:false});
+  c
