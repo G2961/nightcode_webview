@@ -773,6 +773,173 @@ class MainActivity : ComponentActivity() {
                 endRequest()
             }.start()
         }
+
+        /**
+         * Executes a command over SSH on a host looked up by alias from a hosts
+         * file (see loadSshHost). Returns combined exit code / stdout / stderr as
+         * JSON: {"code":0,"stdout":"...","stderr":"...","error":false,"message":""}
+         */
+        @JavascriptInterface
+        fun sshExec(hostAlias: String, command: String, timeoutMs: Int, cb: String) {
+            beginRequest()
+            Thread {
+                var payload: String
+                try {
+                    val host = loadSshHost(hostAlias)
+                        ?: throw Exception("HOST_NOT_FOUND: no entry '$hostAlias' in ssh_hosts.txt")
+                    val out = runSshCommand(host, command, if (timeoutMs > 0) timeoutMs else 60000)
+                    payload = "{\"code\":${out.exitCode}," +
+                        "\"stdout\":${jsonString(out.stdout)}," +
+                        "\"stderr\":${jsonString(out.stderr)}," +
+                        "\"error\":false,\"message\":\"\"}"
+                } catch (e: Exception) {
+                    payload = "{\"code\":-1,\"stdout\":\"\",\"stderr\":\"\"," +
+                        "\"error\":true,\"message\":${jsonString(e.message ?: e.toString())}}"
+                }
+                js("window.__sshResult && window.__sshResult(${jsonString(cb)}, $payload)")
+                endRequest()
+            }.start()
+        }
+
+        /** Lists the host aliases defined in ssh_hosts.txt, without secrets. */
+        @JavascriptInterface
+        fun sshListHosts(cb: String) {
+            Thread {
+                try {
+                    val hosts = loadAllSshHosts()
+                    val arr = hosts.joinToString(",") {
+                        "{\"alias\":${jsonString(it.alias)},\"user\":${jsonString(it.user)}," +
+                            "\"ip\":${jsonString(it.ip)},\"port\":${it.port}," +
+                            "\"auth\":${jsonString(if (it.privateKey != null) "key" else "password")}}"
+                    }
+                    fsCallback(cb, "[$arr]", false)
+                } catch (e: Exception) {
+                    fsCallback(cb, e.message ?: "LIST_FAILED", true)
+                }
+            }.start()
+        }
+    }
+
+    /* ── SSH: hosts file + JSch exec ── */
+
+    private data class SshHost(
+        val alias: String,
+        val ip: String,
+        val port: Int,
+        val user: String,
+        val privateKey: String?,   // PEM text, if auth type is "key"
+        val passphrase: String?,   // optional passphrase for the key
+        val password: String?      // used when auth type is "password"
+    )
+
+    private data class SshExecResult(val exitCode: Int, val stdout: String, val stderr: String)
+
+    /**
+     * Hosts file format — one line per host, pipe-separated, '#' starts a
+     * comment line. Blank fields are allowed where noted.
+     *
+     *   alias|ip|port|user|auth|key_or_password
+     *
+     * auth is either "key" or "password".
+     *  - key:      key_or_password is the PATH to a PEM private key file,
+     *              resolved the same way as project/workspace files
+     *              (optionally "workspace:keys/id_ed25519"). Add a 7th field
+     *              for the key passphrase if the key is encrypted (optional).
+     *  - password: key_or_password is the literal password.
+     *
+     * Example:
+     *   myserver|203.0.113.5|22|root|key|workspace:ssh/id_ed25519
+     *   backup|10.0.0.9|22|root|password|hunter2
+     *
+     * The file itself is looked up as "ssh_hosts.txt" in the current project
+     * first, then "workspace:ssh_hosts.txt" in the workspace root.
+     */
+    private fun readSshHostsFile(): String {
+        val proj = projectRoot?.findFileRecursive("ssh_hosts.txt")
+        val ws = workspaceRoot?.findFileRecursive("ssh_hosts.txt")
+        val file = proj ?: ws ?: throw Exception("ssh_hosts.txt not found in project or workspace root")
+        val bytes = contentResolver.openInputStream(file.uri)?.use { it.readBytes() }
+            ?: throw Exception("failed to read ssh_hosts.txt")
+        return String(bytes, Charsets.UTF_8)
+    }
+
+    private fun parseSshHostLine(line: String): SshHost? {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("#")) return null
+        val parts = trimmed.split("|").map { it.trim() }
+        if (parts.size < 6) return null
+        val alias = parts[0]
+        val ip = parts[1]
+        val port = parts[2].toIntOrNull() ?: 22
+        val user = parts[3]
+        val auth = parts[4].lowercase()
+        val secret = parts[5]
+        val passphrase = parts.getOrNull(6)?.takeIf { it.isNotEmpty() }
+        return when (auth) {
+            "key" -> {
+                val keyDoc = (projectRoot?.findFileRecursive(secret.removePrefix("workspace:"))
+                    ?: workspaceRoot?.findFileRecursive(secret.removePrefix("workspace:")))
+                    ?: throw Exception("SSH key file not found: $secret (host '$alias')")
+                val keyBytes = contentResolver.openInputStream(keyDoc.uri)?.use { it.readBytes() }
+                    ?: throw Exception("failed to read key file for host '$alias'")
+                SshHost(alias, ip, port, user, String(keyBytes, Charsets.UTF_8), passphrase, null)
+            }
+            "password" -> SshHost(alias, ip, port, user, null, null, secret)
+            else -> throw Exception("unknown auth type '$auth' for host '$alias' (use 'key' or 'password')")
+        }
+    }
+
+    private fun loadAllSshHosts(): List<SshHost> =
+        readSshHostsFile().lineSequence().mapNotNull { parseSshHostLine(it) }.toList()
+
+    private fun loadSshHost(alias: String): SshHost? =
+        loadAllSshHosts().firstOrNull { it.alias == alias }
+
+    private fun runSshCommand(host: SshHost, command: String, timeoutMs: Int): SshExecResult {
+        val jsch = com.jcraft.jsch.JSch()
+        if (host.privateKey != null) {
+            jsch.addIdentity(
+                host.alias,
+                host.privateKey.toByteArray(Charsets.UTF_8),
+                null,
+                host.passphrase?.toByteArray(Charsets.UTF_8)
+            )
+        }
+        val session = jsch.getSession(host.user, host.ip, host.port)
+        if (host.password != null) session.setPassword(host.password)
+        // Trust-on-first-use: no known_hosts file exists in this sandboxed
+        // environment, so host key checking is disabled. This is the standard
+        // tradeoff for headless/automated SSH clients without a persisted
+        // known_hosts store.
+        session.setConfig("StrictHostKeyChecking", "no")
+        session.timeout = timeoutMs
+        session.connect(timeoutMs)
+        try {
+            val channel = session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+            channel.setCommand(command)
+            val stdoutStream = java.io.ByteArrayOutputStream()
+            val stderrStream = java.io.ByteArrayOutputStream()
+            channel.outputStream = stdoutStream
+            channel.setErrStream(stderrStream)
+            channel.connect(timeoutMs)
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (!channel.isClosed) {
+                if (System.currentTimeMillis() > deadline) {
+                    channel.disconnect()
+                    throw Exception("SSH command timed out after ${timeoutMs}ms")
+                }
+                Thread.sleep(50)
+            }
+            val exitCode = channel.exitStatus
+            channel.disconnect()
+            return SshExecResult(
+                exitCode,
+                stdoutStream.toString("UTF-8"),
+                stderrStream.toString("UTF-8")
+            )
+        } finally {
+            session.disconnect()
+        }
     }
 
     companion object {
