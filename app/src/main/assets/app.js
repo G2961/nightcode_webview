@@ -427,6 +427,49 @@ async function createWorkspaceProject(name){
   save();loadExtensions();render();
   return {ok:true};
 }
+
+/* ── Workspace project picker ──────────────────────────────────────────────
+   Projects are subfolders of the permanent workspace. Keep this UI entirely
+   in the WebView: Android only exposes list/switch/create operations through
+   the existing bridge.
+*/
+async function renderProjectsSheet(){
+  const setup=$("projectsWsSetup"),body=$("projectsWsBody"),list=$("projectsList");
+  if(!setup||!body||!list)return;
+  const has=hasWorkspace();
+  setup.style.display=has?"none":"";
+  body.style.display=has?"":"none";
+  if(!has){list.innerHTML="";return;}
+  list.innerHTML='<div class="ext-empty">Loading projects…</div>';
+  const names=await listWorkspaceProjects();
+  if(!names.length){
+    list.innerHTML='<div class="ext-empty">No project folders yet. Create one above.</div>';
+    return;
+  }
+  list.innerHTML=names.map(name=>{
+    const safe=encodeURIComponent(name);
+    const active=name===state.projectName;
+    return `<button class="sheet-row project-entry ${active?"selected":""}" onclick="selectWorkspaceProject('${safe}')">`+
+      `<span class="row-ico"><svg><use href="#i-folder"/></svg></span>`+
+      `<span style="flex:1;text-align:left">${esc(name)}</span>`+
+      (active?'<span class="row-arrow"><svg><use href="#i-check"/></svg></span>':'<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span>')+
+      `</button>`;
+  }).join("");
+}
+
+async function selectWorkspaceProject(encodedName){
+  const name=decodeURIComponent(encodedName);
+  const ok=await switchWorkspaceProject(name);
+  if(!ok){showBanner("Could not open project: "+name);return;}
+  closeSheets();
+  showBanner("Project: "+name);
+  renderProjectsSheet();
+}
+
+function openProjectsSheet(){
+  openSheet("projectsSheet");
+  renderProjectsSheet();
+}
 window.__onProjectPicked=function(name){
   if(name){
     state.projectName=name;
@@ -1963,170 +2006,6 @@ function showToolActivity(name,input){
   };
 }
 
-
-/* ── App event wiring / startup ─────────────────────────────────────────────
-   Keep the HTML deliberately dumb: all interactive controls are wired here.
-   This also makes a broken/missing handler fail visibly in the console instead
-   of leaving buttons that only animate when tapped. */
-function wireAppUI(){
-  const on=(id,event,fn)=>{const el=$(id);if(el)el.addEventListener(event,fn)};
-  const click=(id,fn)=>on(id,"click",fn);
-
-  click("menuBtn",()=>{$("drawer").classList.add("open");$("scrim").classList.add("open");renderRecent();});
-  click("closeDrawer",()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")});
-  click("scrim",()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open")});
-  click("moreBtn",()=>openSheet("settingsSheet"));
-  click("sheetScrim",()=>closeSheets());
-
-  click("newChat",()=>newChat());
-  click("drawerNew",()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open");newChat()});
-  click("openProjectCard",()=>openProject());
-  click("drawerConsole",()=>{$("drawer").classList.remove("open");$("scrim").classList.remove("open");openConsole()});
-  click("addBtn",()=>openSheet("addSheet"));
-  click("rowProjectFolder",async()=>{
-    closeSheets();
-    if(hasWorkspace()){
-      openSheet("projectsSheet");
-      await renderProjects();
-    }else openProject();
-  });
-  click("rowWebSearch",()=>{$("input").value="/";closeSheets();updateSlashMenu();$("input").focus()});
-  click("rowAddToProject",()=>{closeSheets();addToProject()});
-  click("rowToolAccess",()=>showBanner("Tools are enabled automatically for the connected project/workspace."));
-
-  click("saveSettings",async()=>{
-    state.base=($('baseUrl')?.value||"").trim().replace(/\/$/,"");
-    state.key=($('apiKey')?.value||"").trim();
-    save();
-    await fetchModels(true);
-  });
-  click("refreshModels",()=>fetchModels(false));
-  click("modelBtn",()=>{renderModels();openSheet("modelSheet")});
-  click("ctxRingBtn",()=>{renderUsagePanel();openSheet("contextSheet")});
-
-  click("saveKeyBtn",()=>{
-    state.ollamaKey=($('ollamaKeyInput')?.value||"").trim();
-    state.searchProvider=$('searchProviderSel')?.value||"auto";
-    save();
-    const el=$("keyStatus");if(el)el.textContent=state.ollamaKey?"Ollama key saved":"Free search (Bing / Google News)";
-  });
-  click("verifyOllamaBtn",async()=>{
-    state.ollamaKey=($('ollamaKeyInput')?.value||"").trim();save();
-    const el=$("keyStatus");
-    if(!state.ollamaKey){if(el)el.textContent="Enter an Ollama API key first";return}
-    try{
-      const r=await ollamaApi("tags",{});
-      if(r.error||r.status<200||r.status>=300)throw Error(r.body||"request failed");
-      if(el)el.textContent="Ollama key works";
-    }catch(e){if(el)el.textContent="Error: "+String(e.message||e).slice(0,180)}
-  });
-  on("searchProviderSel","change",e=>{state.searchProvider=e.target.value;save()});
-
-  click("wsPick",()=>window.Android?.openWorkspacePicker?.());
-  click("wsClear",()=>{window.Android?.clearWorkspace?.();updateWorkspaceUI();loadExtensions();render()});
-  on("wsEnabled","change",e=>{
-    state.wsEnabled=!!e.target.checked;save();
-    if(state.wsEnabled&&!hasWorkspace())window.Android?.openWorkspacePicker?.();
-    updateWorkspaceUI();
-  });
-
-  click("extBtn",()=>{openSheet("extSheet");renderExtList()});
-  click("extReload",()=>loadExtensions());
-  click("extAddInline",()=>{
-    const src=($("extInlineSrc")?.value||"").trim();if(!src)return;
-    state.extInline.push(src);save();$("extInlineSrc").value="";loadExtensions();
-  });
-  click("contextBtn",()=>{renderUsagePanel();openSheet("contextSheet")});
-  click("saveContext",()=>saveContextSettings());
-  click("compactNow",()=>compactNow(true));
-
-  click("projectsPickWs",()=>window.Android?.openWorkspacePicker?.());
-  click("projectsOtherFolder",()=>openProject());
-  click("newProjectBtn",()=>createProjectFromUI());
-  on("newProjectName","keydown",e=>{if(e.key==="Enter"){e.preventDefault();createProjectFromUI()}});
-
-  document.querySelectorAll(".ctab").forEach(b=>b.addEventListener("click",()=>setConsoleTab(b.dataset.ctab)));
-  click("consoleClear",()=>{$("consoleOut").innerHTML=""});
-  click("consoleClose",()=>closeSheets());
-  on("consoleInput","keydown",async e=>{
-    const tab=CON.tab;
-    if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();const v=e.target.value;e.target.value="";if(tab==="js")await runJsLine(v);else await runShellLine(v);}
-    else if(e.key==="ArrowUp"||e.key==="ArrowDown"){
-      e.preventDefault();const h=CON.hist[tab];if(!h.length)return;
-      CON.hi[tab]=e.key==="ArrowUp"?Math.min(h.length-1,CON.hi[tab]+1):Math.max(-1,CON.hi[tab]-1);
-      e.target.value=CON.hi[tab]<0?"":h[h.length-1-CON.hi[tab]]||"";
-    }
-  });
-
-  on("input","input",()=>{resizeInput();updateSlashMenu()});
-  on("input","keydown",async e=>{
-    if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();if($("sendBtn").classList.contains("stop"))cancelActiveStream();else await send();}
-    else if(e.key==="Escape"){$("slashMenu").classList.remove("show");}
-  });
-  click("sendBtn",()=>{if($("sendBtn").classList.contains("stop"))cancelActiveStream();else send()});
-
-  // Delegation for controls recreated by render().
-  on("chat","click",e=>{
-    const b=e.target.closest("button[data-act]");if(!b)return;
-    const msg=b.closest(".message");if(!msg)return;
-    const idx=Number(msg.dataset.idx);const act=b.dataset.act;
-    if(act==="copy")copyToClipboard(state.messages[idx]?.text||"");
-    else if(act==="edit")editMessage(idx);
-    else if(act==="retry")retryMessage(idx);
-    else if(act==="prevVariant")switchVariant(msg.querySelector(".msg-variant-switch")?.dataset.node||msg.dataset.node,-1);
-    else if(act==="nextVariant")switchVariant(msg.querySelector(".msg-variant-switch")?.dataset.node||msg.dataset.node,1);
-  });
-  on("chatSearch","input",()=>renderRecent());
-
-  // Restore the controls from persisted state.
-  $("baseUrl").value=state.base||"";
-  $("apiKey").value=state.key||"";
-  $("ollamaKeyInput").value=state.ollamaKey||"";
-  $("searchProviderSel").value=state.searchProvider||"auto";
-  $("inputTokens").value=String(state.settings.input||128000);
-  $("outputTokens").value=String(state.settings.output||6000);
-  $("autoCompact").checked=!!state.settings.auto;
-  $("threshold").value=String(state.settings.threshold||80);
-  $("perModelCtx").checked=isModelOverridden();
-  updateWorkspaceUI();
-  initProjectState();
-  renderModels();updateModelBtn();render();renderAttachments();renderRecent();renderCtxRing();renderUsagePanel();
-  loadExtensions();
-}
-
-function saveContextSettings(){
-  const input=Math.max(1000,Number($("inputTokens").value)||128000);
-  const output=Math.max(256,Number($("outputTokens").value)||6000);
-  const auto=!!$("autoCompact").checked;
-  const threshold=Math.max(10,Math.min(100,Number($("threshold").value)||80));
-  if($("perModelCtx").checked&&state.selected){
-    state.modelContext[state.selected]={input,output};
-  }else if(state.selected&&state.modelContext[state.selected]){
-    delete state.modelContext[state.selected];
-  }
-  state.settings={...state.settings,input,output,auto,threshold};
-  save();renderCtxRing();renderUsagePanel();closeSheets();
-}
-
-async function renderProjects(){
-  const setup=$("projectsWsSetup"),body=$("projectsWsBody"),list=$("projectsList");
-  if(!hasWorkspace()){
-    setup.style.display="";body.style.display="none";return;
-  }
-  setup.style.display="none";body.style.display="";
-  const names=await listWorkspaceProjects();
-  list.innerHTML=names.length?names.map(n=>`<button class="sheet-row link project-item" onclick="switchWorkspaceProject(decodeURIComponent('${encodeURIComponent(n)}')).then(()=>closeSheets())"><span class="row-ico"><svg><use href="#i-folder"/></svg></span>${esc(n)}<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>`).join(""):'<div class="ext-empty">No projects yet.</div>';
-}
-async function createProjectFromUI(){
-  const input=$("newProjectName");const name=(input?.value||"").trim();if(!name)return;
-  const r=await createWorkspaceProject(name);
-  if(!r.ok){showBanner("Could not create project: "+r.error);return}
-  input.value="";closeSheets();render();
-}
-
-// Startup is intentionally last so every function above has been declared.
-document.addEventListener("DOMContentLoaded",wireAppUI,{once:true});
-
 /* ── GitHub integration ───────────────── */
 state.githubToken=localStorage.getItem("githubToken")||"";
 state.githubUser=localStorage.getItem("githubUser")||"";
@@ -2175,18 +2054,13 @@ async function githubPushProject(ownerRepo,message){
   if(commit.error||commit.status<200||commit.status>=300)throw Error("GitHub commit: "+commit.body.slice(0,500));
   const baseTree=JSON.parse(commit.body).tree.sha;
 
-  const listing=await fsCall("fsList","");
+  const listing=await fsCall("list");
   if(listing.error)throw Error("Cannot list project: "+listing.result);
-  const paths=listing.result.split("\n").filter(p=>{
-    if(!p||p.endsWith("/"))return false;
-    if(/^(\.git\/|build\/|\.gradle\/)/.test(p))return false;
-    if(/(^|\/)(local\.properties|ssh_hosts\.txt|\.env(?:\..*)?|.*\.(?:jks|keystore|pem|key|p12|pfx))$/i.test(p))return false;
-    return true;
-  });
+  const paths=listing.result.split("\n").filter(p=>p&&!p.endsWith("/")&&!/^(\.git\/|build\/|\.gradle\/)/.test(p));
   if(!paths.length)throw Error("Project is empty.");
   const tree=[];
   for(const path of paths){
-    const rr=await fsCall("fsRead",path);
+    const rr=await fsCall("read",path);
     if(rr.error)continue;
     const bytes=new TextEncoder().encode(rr.result);
     let bin="";
@@ -2220,6 +2094,32 @@ async function runGitHubTool(name,input){
 }
 
 document.addEventListener("DOMContentLoaded",()=>{
+  /* Projects: open the in-app list of workspace subfolders instead of
+     sending the user to the Android folder picker. */
+  $("rowProjectFolder")?.addEventListener("click",openProjectsSheet);
+  $("openProjectCard")?.addEventListener("click",openProjectsSheet);
+  $("projectsPickWs")?.addEventListener("click",()=>{
+    if(window.Android&&Android.openWorkspacePicker)Android.openWorkspacePicker();
+    else showBanner("Workspace folder picker is available in the Android app.");
+  });
+  $("projectsOtherFolder")?.addEventListener("click",()=>{
+    closeSheets();
+    openProject();
+  });
+  $("newProjectBtn")?.addEventListener("click",async()=>{
+    const input=$("newProjectName");
+    const name=(input?.value||"").trim();
+    if(!name)return;
+    const result=await createWorkspaceProject(name);
+    if(!result.ok){showBanner("Could not create project: "+result.error);return;}
+    input.value="";
+    showBanner("Created project: "+name);
+    openProjectsSheet();
+  });
+  $("newProjectName")?.addEventListener("keydown",e=>{
+    if(e.key==="Enter")$("newProjectBtn")?.click();
+  });
+
   const t=$("githubTokenInput"),r=$("githubRepoInput"),s=$("githubStatus");
   if(t)t.value=state.githubToken||"";
   if(r)r.value=state.githubRepo||"";
