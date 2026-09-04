@@ -99,6 +99,14 @@
       <button class="secondary" id="verifyOllamaBtn">Check key</button>
     </div>
     <div class="key-status" id="keyStatus">Free search (Bing / Google News)</div>
+    <div class="muted-label">GitHub</div>
+    <label>Personal access token<input id="githubTokenInput" type="password" placeholder="github_pat_…"></label>
+    <label>Repository<input id="githubRepoInput" placeholder="owner/repository"></label>
+    <div class="row-btns">
+      <button class="secondary" id="githubSaveBtn">Save token</button>
+      <button class="secondary" id="githubVerifyBtn">Check account</button>
+    </div>
+    <div class="key-status" id="githubStatus">Not connected</div>
     <div class="muted-label">Workspace</div>
     <div id="workspaceStatus" class="workspace-status"></div>
     <label class="switch-row">Use permanent workspace folder<input id="wsEnabled" type="checkbox"></label>
