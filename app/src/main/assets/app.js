@@ -909,7 +909,7 @@ async function send(override,targetId){
       // SSH tools are offered whenever a hosts file could plausibly exist (a
       // project or workspace is connected) — sshExec itself reports HOST_NOT_FOUND
       // if ssh_hosts.txt is missing or the alias isn't in it.
-      body.tools=[...((proj||hasWorkspace())?FILE_TOOLS:[]),...((proj||hasWorkspace())?SSH_TOOLS:[]),...webTools,...extToolDefs()];
+      body.tools=[...((proj||hasWorkspace())?FILE_TOOLS:[]),...((proj||hasWorkspace())?SSH_TOOLS:[]),...GITHUB_TOOLS,...webTools,...extToolDefs()];
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
       // Full SSE parser: collects thinking, text AND tool_use blocks straight from
       // the stream (content_block_start carries id/name, input_json_delta carries
@@ -1256,6 +1256,7 @@ async function runTool(name,input){
       return r&&typeof r==="object"?r:{result:String(r),error:false};
     }catch(e){return {result:String(e&&e.message||e),error:true}}
   }
+  if(name==="github_whoami"||name==="github_push_project")return runGitHubTool(name,input||{});
   if(name==="web_search")return runWebSearch(input.query);
   if(name==="web_fetch"){
     let url=String(input.url||"").trim();
@@ -1937,4 +1938,126 @@ function toolPreview(name,input,result){
   return '<pre>'+esc(out.slice(0,5000))+"</pre>";
 }
 function showToolActivity(name,input){
-  c
+  const chat=$("chat");
+  const card=document.createElement("details");
+  card.className="tool-activity compact";
+  card.open=true;
+  const title=document.createElement("div");
+  title.className="tool-activity-head";
+  title.innerHTML='<div class="tool-activity-icon sm">'+toolIcon(name)+'</div><div class="tool-activity-text"><div class="tool-activity-title">'+esc(toolLabel(name))+'</div><div class="tool-activity-sub">'+esc(toolTarget(input||{}))+'</div></div><div class="tool-activity-status"><span class="tool-spinner"></span></div>';
+  const preview=document.createElement("div");
+  preview.className="tool-preview";
+  preview.innerHTML='<pre>Running…</pre>';
+  card.appendChild(title);
+  card.appendChild(preview);
+  chat.appendChild(card);
+  autoScroll();
+  return {
+    update(result,error){
+      const status=title.querySelector(".tool-activity-status");
+      if(status)status.innerHTML=error?'<span class="tool-error">!</span>':'<span class="tool-done">✓</span>';
+      preview.innerHTML=toolPreview(name,input,result);
+      card.open=false;
+      autoScroll();
+    }
+  };
+}
+
+/* ── GitHub integration ───────────────── */
+state.githubToken=localStorage.getItem("githubToken")||"";
+state.githubUser=localStorage.getItem("githubUser")||"";
+state.githubRepo=localStorage.getItem("githubRepo")||"";
+
+function saveGitHubSettings(){
+  state.githubToken=$("githubTokenInput")?.value.trim()||"";
+  state.githubRepo=$("githubRepoInput")?.value.trim()||"";
+  localStorage.setItem("githubToken",state.githubToken);
+  localStorage.setItem("githubRepo",state.githubRepo);
+}
+async function githubRequest(method,path,body){
+  const token=state.githubToken;
+  if(!token) return {status:401,body:'{"message":"GitHub token is not configured"}',error:true};
+  return httpFetch(method,"https://api.github.com"+path,{
+    "Authorization":"Bearer "+token,
+    "Accept":"application/vnd.github+json",
+    "X-GitHub-Api-Version":"2022-11-28",
+    "content-type":"application/json"
+  },body?JSON.stringify(body):"");
+}
+async function githubVerify(){
+  saveGitHubSettings();
+  if(!state.githubToken){throw Error("Enter a GitHub token first.");}
+  const r=await githubRequest("GET","/user");
+  if(r.error||r.status<200||r.status>=300)throw Error("GitHub: "+(r.body||"authentication failed").slice(0,500));
+  const u=JSON.parse(r.body);
+  state.githubUser=u.login||"";
+  localStorage.setItem("githubUser",state.githubUser);
+  const el=$("githubStatus");
+  if(el)el.textContent="Connected as @"+state.githubUser;
+  return u;
+}
+async function githubPushProject(ownerRepo,message){
+  saveGitHubSettings();
+  if(!state.githubToken)throw Error("GitHub token is not configured.");
+  const repo=(ownerRepo||state.githubRepo||"").replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"").replace(/^\/+|\/+$/g,"");
+  if(!/^[^/]+\/[^/]+$/.test(repo))throw Error("Set repository as owner/name in GitHub settings.");
+  const [owner,name]=repo.split("/");
+  const branch="main";
+  const ref=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${branch}`);
+  if(ref.status===404)throw Error("Branch 'main' was not found in "+repo+".");
+  if(ref.error||ref.status<200||ref.status>=300)throw Error("GitHub ref: "+ref.body.slice(0,500));
+  const refData=JSON.parse(ref.body), headSha=refData.object.sha;
+  const commit=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits/${headSha}`);
+  if(commit.error||commit.status<200||commit.status>=300)throw Error("GitHub commit: "+commit.body.slice(0,500));
+  const baseTree=JSON.parse(commit.body).tree.sha;
+
+  const listing=await fsCall("list");
+  if(listing.error)throw Error("Cannot list project: "+listing.result);
+  const paths=listing.result.split("\n").filter(p=>p&&!p.endsWith("/")&&!/^(\.git\/|build\/|\.gradle\/)/.test(p));
+  if(!paths.length)throw Error("Project is empty.");
+  const tree=[];
+  for(const path of paths){
+    const rr=await fsCall("read",path);
+    if(rr.error)continue;
+    const bytes=new TextEncoder().encode(rr.result);
+    let bin="";
+    const chunk=0x8000;
+    for(let i=0;i<bytes.length;i+=chunk)bin+=String.fromCharCode(...bytes.subarray(i,i+chunk));
+    const content=btoa(bin);
+    const blob=await githubRequest("POST","/repos/"+encodeURIComponent(owner)+"/"+encodeURIComponent(name)+"/git/blobs",{content,encoding:"base64"});
+    if(blob.error||blob.status<200||blob.status>=300)throw Error("Blob failed for "+path+": "+blob.body.slice(0,300));
+    tree.push({path,mode:"100644",type:"blob",sha:JSON.parse(blob.body).sha});
+  }
+  const tr=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees`,{base_tree:baseTree,tree});
+  if(tr.error||tr.status<200||tr.status>=300)throw Error("Tree failed: "+tr.body.slice(0,500));
+  const newTree=JSON.parse(tr.body).sha;
+  const cm=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits`,{message:message||"Update from NightCode",tree:newTree,parents:[headSha]});
+  if(cm.error||cm.status<200||cm.status>=300)throw Error("Commit failed: "+cm.body.slice(0,500));
+  const newSha=JSON.parse(cm.body).sha;
+  const up=await githubRequest("PATCH",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/refs/heads/${branch}`,{sha:newSha,force:false});
+  if(up.error||up.status<200||up.status>=300)throw Error("Push failed: "+up.body.slice(0,500));
+  return "Pushed "+paths.length+" files to "+repo+" (main), commit "+newSha.slice(0,7);
+}
+
+const GITHUB_TOOLS=[
+  {name:"github_whoami",description:"Check the connected GitHub account.",input_schema:{type:"object",properties:{},required:[]}},
+  {name:"github_push_project",description:"Commit the current NightCode project and push it to the configured GitHub repository on the main branch. Use only when the user asks to commit/push/sync to GitHub.",input_schema:{type:"object",properties:{repository:{type:"string",description:"owner/name; optional if configured in Settings"} ,message:{type:"string",description:"Commit message"}},required:[]}}
+];
+
+async function runGitHubTool(name,input){
+  if(name==="github_whoami")return {result:(await githubVerify()).login||state.githubUser,error:false};
+  if(name==="github_push_project")return {result:await githubPushProject(input?.repository,input?.message),error:false};
+  return {result:"Unknown GitHub tool",error:true};
+}
+
+document.addEventListener("DOMContentLoaded",()=>{
+  const t=$("githubTokenInput"),r=$("githubRepoInput"),s=$("githubStatus");
+  if(t)t.value=state.githubToken||"";
+  if(r)r.value=state.githubRepo||"";
+  if(s)s.textContent=state.githubUser?"Connected as @"+state.githubUser:"Not connected";
+  $("githubSaveBtn")?.addEventListener("click",()=>{saveGitHubSettings();s.textContent=state.githubToken?"Token saved — press Check account":"Not connected";});
+  $("githubVerifyBtn")?.addEventListener("click",async()=>{
+    try{const u=await githubVerify();s.textContent="Connected as @"+u.login}
+    catch(e){s.textContent="Error: "+String(e.message||e)}
+  });
+});
