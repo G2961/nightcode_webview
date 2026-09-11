@@ -23,6 +23,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
+import org.eclipse.jgit.api.Git
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -650,6 +652,102 @@ class MainActivity : ComponentActivity() {
         fun fsDelete(path: String, cb: String) { runFs("delete", path, "", cb) }
 
         /**
+         * Clone a git repository into the current project folder (or the
+         * workspace if the target path is prefixed with "workspace:").
+         * Pure Java (JGit) — runs on-device, no git binary or SSH needed.
+         * GitHub/HTTPS clones of public (and token-embedded private) URLs work;
+         * SSH remotes are not supported.
+         * JSON: {"ok":true,"commit":"<sha>","branch":"<ref>","files":N}
+         */
+        @JavascriptInterface
+        fun gitClone(url: String, targetPath: String, cb: String) {
+            beginRequest()
+            Thread {
+                var payload: String
+                try {
+                    val u = url.trim()
+                    if (u.isEmpty()) throw Exception("EMPTY_URL")
+                    if (u.startsWith("git@") || u.startsWith("ssh://")) {
+                        throw Exception("SSH_REMOTES_UNSUPPORTED: use an https:// clone URL")
+                    }
+                    val useWorkspace = targetPath.startsWith("workspace:")
+                    val root = if (useWorkspace) workspaceRoot else (projectRoot ?: workspaceRoot)
+                        ?: throw Exception("NO_PROJECT")
+                    val clean = targetPath.removePrefix("workspace:").trim('/')
+                    // Target dir must resolve inside the project (no escaping via ..)
+                    val parts = clean.split('/').filter { it.isNotBlank() }
+                    if (parts.any { it == "." || it == ".." }) throw Exception("BAD_TARGET")
+                    val destDir = if (parts.isEmpty()) root else resolveDir(root, clean, create = true)
+                        ?: throw Exception("MKDIR_FAILED")
+                    // Refuse to clone into a non-empty folder
+                    if (destDir.listFiles().isNotEmpty()) throw Exception("TARGET_NOT_EMPTY")
+
+                    // Clone into a private cache dir first, then copy the checked-out
+                    // tree (WITHOUT .git) into the SAF folder. JGit cannot run inside
+                    // SAF storage directly, and the WebView tools ignore dotfolders,
+                    // so a full clone with .git there would only waste space.
+                    val cache = File(cacheDir, "gitclone-tmp")
+                    cache.deleteRecursively()
+                    cache.mkdirs()
+                    val cmd = Git.cloneRepository()
+                        .setURI(u)
+                        .setDirectory(cache)
+                        .setCloneAllBranches(false)
+                        .setDepth(1)
+                    try {
+                        cmd.call()
+                    } finally {
+                        // Some JGit versions leave the FS lock held; clear before copy.
+                        File(cache, ".git/index.lock").delete()
+                    }
+                    var copied = 0
+                    fun copyRec(src: File, dstParent: DocumentFile) {
+                        for (f in src.listFiles() ?: return) {
+                            if (f.name == ".git") continue
+                            val dest = if (f.isDirectory) {
+                                dstParent.createDirectory(f.name)
+                            } else {
+                                val mime = if (f.name.endsWith(".svg")) "image/svg+xml"
+                                    else if (f.name.endsWith(".png")) "image/png"
+                                    else if (f.name.endsWith(".jpg") || f.name.endsWith(".jpeg")) "image/jpeg"
+                                    else if (f.name.endsWith(".gif")) "image/gif"
+                                    else if (f.name.endsWith(".ico")) "image/x-icon"
+                                    else if (f.name.endsWith(".webp")) "image/webp"
+                                    else "application/octet-stream"
+                                dstParent.createFile(mime, f.name)
+                            } ?: continue
+                            if (f.isDirectory) copyRec(f, dest)
+                            else {
+                                contentResolver.openOutputStream(dest.uri, "wt")?.use { out ->
+                                    f.inputStream().use { it.copyTo(out, 64 * 1024) }
+                                }
+                                copied++
+                            }
+                        }
+                    }
+                    copyRec(cache, destDir)
+                    val head = File(cache, ".git/HEAD")
+                    val branch = if (head.exists()) {
+                        val h = head.readText().trim()
+                        if (h.startsWith("ref:")) h.removePrefix("ref:").trim().substringAfterLast('/') else "detached"
+                    } else "?"
+                    val commit = try {
+                        val refs = File(cache, ".git/FETCH_HEAD")
+                        if (refs.exists()) refs.readText().trim().split(Regex("\\s+")).firstOrNull() ?: "?"
+                        else "?"
+                    } catch (_: Exception) { "?" }
+                    cache.deleteRecursively()
+                    payload = "{\"ok\":true,\"commit\":${jsonString(commit)}," +
+                        "\"branch\":${jsonString(branch)},\"files\":$copied}"
+                } catch (e: Exception) {
+                    payload = "{\"ok\":false,\"error\":${jsonString(e.message ?: e.toString())}}"
+                }
+                js("window.__gitResult && window.__gitResult(${jsonString(cb)}, $payload)")
+                endRequest()
+            }.start()
+        }
+
+        /**
          * Streaming SSE variant: reads text/event-stream line by line and forwards
          * each data: payload to window.__streamChunk(cbId, data). Ends with
          * window.__streamDone(cbId, status, error).
@@ -939,6 +1037,24 @@ class MainActivity : ComponentActivity() {
             )
         } finally {
             session.disconnect()
+        }
+    }
+
+    /** Recursively copies a Java-IO directory tree into a SAF directory. */
+    private fun fsCopyDir(src: File, dst: DocumentFile, skipDotFolders: Boolean) {
+        for (f in src.listFiles() ?: return) {
+            if (skipDotFolders && f.isDirectory && f.name.startsWith(".")) continue
+            val dest = if (f.isDirectory) {
+                dst.createDirectory(f.name) ?: continue
+            } else {
+                dst.createFile("application/octet-stream", f.name) ?: continue
+            }
+            if (f.isDirectory) fsCopyDir(f, dest, skipDotFolders)
+            else {
+                contentResolver.openOutputStream(dest.uri, "wt")?.use { out ->
+                    f.inputStream().use { it.copyTo(out, 64 * 1024) }
+                }
+            }
         }
     }
 

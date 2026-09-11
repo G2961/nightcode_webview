@@ -55,4 +55,7 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.0.1")
     // SSH client (exec + sftp) вЂ” pure Java, no NDK needed.
     implementation("com.github.mwiede:jsch:0.2.17")
+    // Embedded git (clone into project folders) — pure Java, no git binary / NDK.
+    implementation("org.eclipse.jgit:org.eclipse.jgit:6.10.1.202505221210-r")
+    implementation("org.slf4j:slf4j-nop:2.0.16")
 }

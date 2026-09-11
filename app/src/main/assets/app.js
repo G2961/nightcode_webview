@@ -403,6 +403,18 @@ function fsCall(method,...args){
     try{Android[method](...args,cbId)}catch(e){delete fsCbs[cbId];resolve({result:String(e),error:true})}
   });
 }
+window.__gitResult=function(cbId,payload){
+  const cb=fsCbs[cbId];if(!cb)return;
+  delete fsCbs[cbId];
+  cb(payload,false);
+};
+async function gitClone(url,targetPath){
+  const r=await fsCall("gitClone",String(url||"").trim(),String(targetPath||""));
+  if(r.error||typeof r.result!=="object")return {result:"GIT_CLONE_FAILED: "+(typeof r.result==="string"?r.result:"bridge error"),error:true};
+  const p=r.result;
+  if(!p.ok)return {result:"GIT_CLONE_FAILED: "+(p.error||"unknown"),error:true};
+  return {result:["Cloned successfully.","branch: "+(p.branch||"?"),"commit: "+String(p.commit||"?").slice(0,10),"files copied: "+p.files,"target: "+(targetPath||"project root")].join("\n"),error:false};
+}
 async function openProject(){
   if(window.Android&&Android.openProjectPicker){Android.openProjectPicker()}
   else alert("Project folders are available in the Android app.");
@@ -953,7 +965,7 @@ async function send(override,targetId){
       // SSH tools are offered whenever a hosts file could plausibly exist (a
       // project or workspace is connected) — sshExec itself reports HOST_NOT_FOUND
       // if ssh_hosts.txt is missing or the alias isn't in it.
-      body.tools=[...((proj||hasWorkspace())?FILE_TOOLS:[]),...((proj||hasWorkspace())?SSH_TOOLS:[]),...GITHUB_TOOLS,...webTools,...extToolDefs()];
+      body.tools=[...((proj||hasWorkspace())?FILE_TOOLS:[]),...((proj||hasWorkspace())?SSH_TOOLS:[]),...((proj||hasWorkspace())?GIT_TOOLS:[]),...GITHUB_TOOLS,...webTools,...extToolDefs()];
       const reqUrl=state.base.replace(/\/$/,"")+"/v1/messages";
       // Full SSE parser: collects thinking, text AND tool_use blocks straight from
       // the stream (content_block_start carries id/name, input_json_delta carries
@@ -1165,6 +1177,9 @@ const FILE_TOOLS=[
 const SSH_TOOLS=[
   {name:"ssh_list_hosts",description:"List SSH host aliases configured in ssh_hosts.txt (no secrets returned — alias, user, ip, port, auth type only). Call this first if you don't know which alias to use.",input_schema:{type:"object",properties:{},required:[]}},
   {name:"ssh_exec",description:"Run a shell command on a remote server over SSH, using credentials from ssh_hosts.txt. Pass the host's alias (not its IP) — look it up with ssh_list_hosts if unsure. Returns exit code, stdout and stderr.",input_schema:{type:"object",properties:{host:{type:"string",description:"Host alias as defined in ssh_hosts.txt"},command:{type:"string",description:"Shell command to execute on the remote host"}},required:["host","command"]}}
+];
+const GIT_TOOLS=[
+  {name:"git_clone",description:"Clone a git repository into the connected project folder on the device (runs on-device via JGit, no SSH or git binary needed). HTTPS remotes only. The target folder must be empty or nonexistent.",input_schema:{type:"object",properties:{url:{type:"string",description:"HTTPS clone URL, e.g. https://github.com/owner/repo.git"},target_path:{type:"string",description:"Optional subfolder inside the project. Defaults to project root."}},required:["url"]}}
 ];
 const WEB_SEARCH_TOOL={name:"web_search",description:"Search the web for current information: documentation, recent events, library APIs, error messages. Returns titles, snippets and URLs.",input_schema:{type:"object",properties:{query:{type:"string",description:"Search query"}},required:["query"]}};
 const WEB_FETCH_TOOL={name:"web_fetch",description:"Fetch a web page by URL and return its main text content. Use after web_search to read a promising result in full before answering.",input_schema:{type:"object",properties:{url:{type:"string",description:"Full URL including https://"}},required:["url"]}};
@@ -1381,6 +1396,11 @@ async function runTool(name,input){
     if(r.stdout)parts.push("stdout:\n"+r.stdout.slice(0,8000));
     if(r.stderr)parts.push("stderr:\n"+r.stderr.slice(0,4000));
     return {result:parts.join("\n\n"),error:r.code!==0};
+  }
+  if(name==="git_clone"){
+    const u=String(input.url||"").trim();
+    if(!u)return {result:"MISSING_URL",error:true};
+    return await gitClone(u,String(input.target_path||""));
   }
   return {result:"UNKNOWN_TOOL",error:true};
 }
@@ -1927,12 +1947,12 @@ function toolIcon(name){
     web_search:'<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5S14.6 18.2 12 20.5c-2.6-2.3-3.9-5.2-3.9-8.5S9.4 5.8 12 3.5z"/>',
     web_fetch:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/>',
     ssh_exec:'<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="m7 9 3 3-3 3M13 15h4"/>',
-    ssh_list_hosts:'<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M7 9h.01M7 12h.01M7 15h.01M11 9h6M11 12h6M11 15h6"/>',
+    ssh_list_hosts:'<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M7 9h.01M7 12h.01M7 15h.01M11 9h6M11 12h6M11 15h6"/>',git_clone:'<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/><path d="M6 7v10"/><path d="M8 5h4a4 4 0 0 1 4 4v1"/>',
     __ext:'<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M16.5 13.5v6M13.5 16.5h6"/>'
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.__ext)+'</svg>';
 }
-function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page',ssh_exec:'Running SSH command',ssh_list_hosts:'Listing SSH hosts'}[name]||String(name||'').replace(/_/g,' '))}
+function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page',ssh_exec:'Running SSH command',ssh_list_hosts:'Listing SSH hosts',git_clone:'Cloning repository'}[name]||String(name||'').replace(/_/g,' '))}
 /* Claude-style one-line labels: past tense + target, e.g. Searched "query" */
 function toolCompactLabel(t){
   const target=toolTarget(t.input)||"";
