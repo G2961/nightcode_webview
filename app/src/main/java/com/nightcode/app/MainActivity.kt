@@ -671,7 +671,7 @@ class MainActivity : ComponentActivity() {
                         throw Exception("SSH_REMOTES_UNSUPPORTED: use an https:// clone URL")
                     }
                     val useWorkspace = targetPath.startsWith("workspace:")
-                    val root = if (useWorkspace) workspaceRoot else (projectRoot ?: workspaceRoot)
+                    val root: DocumentFile = (if (useWorkspace) workspaceRoot else (projectRoot ?: workspaceRoot))
                         ?: throw Exception("NO_PROJECT")
                     val clean = targetPath.removePrefix("workspace:").trim('/')
                     // Target dir must resolve inside the project (no escaping via ..)
