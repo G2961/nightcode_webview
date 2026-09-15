@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover,interactive-widget=resizes-content">
+<meta name="theme-color" content="#090a0c">
+<title>NightCode</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2.5l2.4 6.1 6.1 2.4-6.1 2.4L12 19.5l-2.4-6.1L3.5 11l6.1-2.4z"/><path d="M19 3v4M21 5h-4" stroke-width="1.5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.2 14.8A8.4 8.4 0 1 1 9.2 3.8a6.8 6.8 0 0 0 11 11z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-arrow-r" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7H8l1.6-2h4.8L16 7h2.5A1.5 1.5 0 0 1 20 8.5v8A1.5 1.5 0 0 1 18.5 18h-13A1.5 1.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.5" r="3.2"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 15.5l-4.5-4.5-8 8"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M13.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M13.5 3v5.5H19"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5S14.6 18.2 12 20.5c-2.6-2.3-3.9-5.2-3.9-8.5S9.4 5.8 12 3.5z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4.5l2-3A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M5 5v5m0 4v5m7-14v9m0 4v1m7-14v1m0 4v9"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="19" cy="8" r="2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M6.5 7l1 12.5A1.5 1.5 0 0 0 9 21h6a1.5 1.5 0 0 0 1.5-1.5L17.5 7"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="M5 8l4 4-4 4"/><path d="M12 17h7"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><path d="M16.5 13.5v6M13.5 16.5h6"/></symbol>
+</svg>
+
+<div id="app">
+  <header class="topbar">
+    <button class="icon-btn" id="menuBtn" aria-label="Menu"><svg><use href="#i-menu"/></svg></button>
+    <div class="brand">NightCode</div>
+    <button class="icon-btn" id="moreBtn" aria-label="Settings"><svg><use href="#i-more"/></svg></button>
+  </header>
+
+  <main id="chat" class="chat">
+    <section id="welcome" class="welcome">
+      <div class="star"><svg><use href="#i-moon"/></svg></div>
+      <h1>Hello, night owl</h1>
+      <p>Your local AI coding workspace</p>
+      <button class="quick" id="newChat">
+        <span class="quick-ico"><svg><use href="#i-plus"/></svg></span>
+        <span class="quick-text"><b>New chat</b><small>Start a fresh conversation</small></span>
+        <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
+      </button>
+      <button class="quick" id="openProjectCard">
+        <span class="quick-ico"><svg><use href="#i-folder"/></svg></span>
+        <span class="quick-text"><b>Open project</b><small id="openProjectSub">Continue coding</small></span>
+        <span class="quick-arrow"><svg><use href="#i-arrow-r"/></svg></span>
+      </button>
+    </section>
+  </main>
+
+  <aside id="drawer" class="drawer">
+    <div class="drawer-head"><b>NightCode</b><button class="icon-btn" id="closeDrawer"><svg><use href="#i-close"/></svg></button></div>
+    <button class="primary" id="drawerNew"><svg><use href="#i-plus"/></svg>New chat</button>
+    <button class="secondary" id="drawerConsole"><svg><use href="#i-term"/></svg>Console</button>
+    <div class="drawer-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input id="chatSearch" placeholder="Search chats" autocomplete="off">
+    </div>
+    <div id="recent"></div>
+  </aside>
+  <div id="scrim" class="scrim"></div>
+
+  <div id="addSheet" class="sheet">
+    <div class="sheet-title">Add to chat</div>
+    <div class="add-grid">
+      <button onclick="openFiles()"><svg><use href="#i-camera"/></svg><small>Camera</small></button>
+      <button onclick="openFiles()"><svg><use href="#i-image"/></svg><small>Photos</small></button>
+      <button onclick="openFiles()"><svg><use href="#i-file"/></svg><small>Files</small></button>
+    </div>
+    <button class="sheet-row" id="rowProjectFolder"><span class="row-ico"><svg><use href="#i-folder"/></svg></span>Projects<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <button class="sheet-row" id="rowWebSearch"><span class="row-ico"><svg><use href="#i-globe"/></svg></span>Web search<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <button class="sheet-row" id="rowAddToProject"><span class="row-ico"><svg><use href="#i-file"/></svg></span>Add to project<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <button class="sheet-row" id="rowToolAccess"><span class="row-ico"><svg><use href="#i-sliders"/></svg></span>Tool access<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+  </div>
+
+  <div id="settingsSheet" class="sheet">
+    <div class="sheet-title">Connection</div>
+    <label>Base URL<input id="baseUrl" placeholder="https://api.example.com"></label>
+    <label>API key<input id="apiKey" type="password" placeholder="API key"></label>
+    <label>Protocol
+      <select id="protocolSel">
+        <option value="anthropic">Anthropic (x-api-key)</option>
+        <option value="openai">OpenAI-compatible (Bearer)</option>
+      </select>
+    </label>
+    <button class="primary" id="saveSettings">Save &amp; refresh models</button>
+    <div class="muted-label">Web search</div>
+    <label>Search engine
+      <select id="searchProviderSel">
+        <option value="auto">Auto (Ollama → free)</option>
+        <option value="ollama">Ollama (API key)</option>
+        <option value="free">Free (Bing / Google News)</option>
+      </select>
+    </label>
+    <label>Ollama API key<input id="ollamaKeyInput" type="password" placeholder="ollama.com/settings/keys"></label>
+    <div class="row-btns">
+      <button class="secondary" id="saveKeyBtn">OK</button>
+      <button class="secondary" id="verifyOllamaBtn">Check key</button>
+    </div>
+    <div class="key-status" id="keyStatus">Free search (Bing / Google News)</div>
+    <div class="muted-label">GitHub</div>
+    <label>Personal access token<input id="githubTokenInput" type="password" placeholder="github_pat_…"></label>
+    <label>Repository<input id="githubRepoInput" placeholder="owner/repository"></label>
+    <div class="row-btns">
+      <button class="secondary" id="githubSaveBtn">Save token</button>
+      <button class="secondary" id="githubVerifyBtn">Check account</button>
+    </div>
+    <div class="key-status" id="githubStatus">Not connected</div>
+    <div class="muted-label">Workspace</div>
+    <div id="workspaceStatus" class="workspace-status"></div>
+    <label class="switch-row">Use permanent workspace folder<input id="wsEnabled" type="checkbox"></label>
+    <button class="secondary" id="wsPick">Choose workspace folder</button>
+    <button class="secondary" id="wsClear">Disconnect workspace</button>
+    <div class="muted-label">Advanced</div>
+    <button class="sheet-row link" id="extBtn"><span class="row-ico"><svg><use href="#i-ext"/></svg></span>Extensions<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <button class="sheet-row link" id="contextBtn"><span class="row-ico"><svg><use href="#i-sliders"/></svg></span>Context &amp; memory<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    <div id="settingsError" class="error"></div>
+  </div>
+
+  <div id="extSheet" class="sheet">
+    <div class="sheet-title">Extensions</div>
+    <div id="extList"></div>
+    <button class="secondary" id="extReload">Reload extensions</button>
+    <div class="muted-label">Quick add (saved on device)</div>
+    <textarea id="extInlineSrc" class="ext-inline-src" spellcheck="false" placeholder='nc.register({name:"demo",tools:[{name:"my_tool",description:"Example tool",schema:{type:"object",properties:{}},run:async()=>({result:"hi from extension",error:false})}],commands:{hi:(a,api)=>api.chat("hello!")}});'></textarea>
+    <button class="secondary" id="extAddInline">Load snippet</button>
+    <div class="ext-hint">Extension files load automatically from the permanent workspace folder <b>extensions/*.js</b> and from the project at <b>.nightcode/extensions/*.js</b>. They can add agent tools, slash commands and hooks — and run with full app access, so only add code you trust.</div>
+  </div>
+
+  <div id="modelSheet" class="sheet">
+    <div class="sheet-title">Select model</div>
+    <div id="models"></div>
+    <button class="secondary" id="refreshModels">Refresh models</button>
+  </div>
+
+  <div id="projectsSheet" class="sheet">
+    <div class="sheet-title">Projects</div>
+    <div id="projectsWsSetup" style="display:none">
+      <div class="ext-empty">Pick a permanent folder first — projects live inside it as subfolders.</div>
+      <button class="primary" id="projectsPickWs"><svg><use href="#i-folder"/></svg>Choose projects folder</button>
+    </div>
+    <div id="projectsWsBody" style="display:none">
+      <div class="new-project-row">
+        <input id="newProjectName" placeholder="New project name" autocomplete="off">
+        <button class="icon-btn" id="newProjectBtn" aria-label="Create"><svg><use href="#i-plus"/></svg></button>
+      </div>
+      <div id="projectsList"></div>
+      <button class="sheet-row link" id="projectsOtherFolder"><span class="row-ico"><svg><use href="#i-folder"/></svg></span>Open a folder outside projects<span class="row-arrow"><svg><use href="#i-arrow-r"/></svg></span></button>
+    </div>
+  </div>
+
+  <div id="contextSheet" class="sheet">
+    <div class="sheet-title">Context &amp; memory</div>
+    <div class="usage-panel" id="usagePanel">
+      <div class="usage-row-top">
+        <div class="usage-ring-big">
+          <svg viewBox="0 0 64 64">
+            <circle class="usage-ring-bg" cx="32" cy="32" r="27"/>
+            <circle class="usage-ring-fg" id="usageRingFg" cx="32" cy="32" r="27"/>
+          </svg>
+          <span id="usageRingPct">0%</span>
+        </div>
+        <div class="usage-stats">
+          <div class="usage-stat"><b id="usageUsed">0</b><small>used tokens</small></div>
+          <div class="usage-stat"><b id="usageLimit">0</b><small>context limit</small></div>
+        </div>
+      </div>
+      <div class="usage-breakdown" id="usageBreakdown"></div>
+    </div>
+    <div class="ctx-model-note" id="ctxModelNote"></div>
+    <label class="switch-row">Per-model overrides<input id="perModelCtx" type="checkbox"></label>
+    <label>Input context tokens<input id="inputTokens" inputmode="numeric"></label>
+    <label>Max output tokens<input id="outputTokens" inputmode="numeric"></label>
+    <label class="switch-row">Auto compact <input id="autoCompact" type="checkbox"></label>
+    <label>Compact threshold %<input id="threshold" inputmode="numeric"></label>
+    <button class="primary" id="saveContext">Save</button>
+    <button class="secondary" id="compactNow">Compact context now</button>
+  </div>
+
+  <div id="consoleSheet" class="sheet console-sheet">
+    <div class="console-tabs">
+      <button class="ctab active" data-ctab="shell">Shell</button>
+      <button class="ctab" data-ctab="js">JS</button>
+      <button class="ctab" data-ctab="logs">Logs</button>
+      <span class="console-info" id="consoleInfo"></span>
+      <button class="icon-btn" id="consoleClear" aria-label="Clear"><svg><use href="#i-trash"/></svg></button>
+      <button class="icon-btn" id="consoleClose" aria-label="Close"><svg><use href="#i-close"/></svg></button>
+    </div>
+    <div id="consoleOut" class="console-out"></div>
+    <div class="console-input-row" id="consoleRow">
+      <span id="consolePrompt" class="console-prompt">nc:/$</span>
+      <input id="consoleInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="help">
+    </div>
+  </div>
+
+  <div id="sheetScrim" class="sheet-scrim"></div>
+
+  <button id="scrollDownBtn" class="scroll-down-btn" aria-label="Scroll to bottom" onclick="scrollToBottom(true)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button>
+
+  <div class="composer-wrap">
+    <div id="slashMenu" class="slash-menu"></div>
+    <div id="attachments" class="attachments"></div>
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="Ask NightCode anything…"></textarea>
+      <div class="composer-bar">
+        <button class="icon-btn" id="addBtn"><svg><use href="#i-plus"/></svg></button>
+        <button class="model-btn" id="modelBtn">Model</button>
+        <span></span>
+        <button class="ctx-ring" id="ctxRingBtn" aria-label="Context usage">
+          <svg viewBox="0 0 32 32">
+            <circle class="ctx-ring-bg" cx="16" cy="16" r="13"/>
+            <circle class="ctx-ring-fg" id="ctxRingFg" cx="16" cy="16" r="13"/>
+          </svg>
+          <span class="ctx-ring-label" id="ctxRingLabel">0%</span>
+        </button>
+        <button class="send-btn" id="sendBtn"><svg class="icon-send"><use href="#i-arrow-up"/></svg><svg class="icon-stop" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
