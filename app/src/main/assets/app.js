@@ -1471,7 +1471,7 @@ async function runTool(name,input){
       return r&&typeof r==="object"?r:{result:String(r),error:false};
     }catch(e){return {result:String(e&&e.message||e),error:true}}
   }
-  if(name==="github_whoami"||name==="github_push_project"||name==="github_pull_project")return runGitHubTool(name,input||{});
+  if(name==="github_whoami"||name==="github_create_repo"||name==="github_push_project"||name==="github_pull_project")return runGitHubTool(name,input||{});
   if(name==="web_search")return runWebSearch(input.query);
   if(name==="web_fetch"){
     let url=String(input.url||"").trim();
@@ -2108,7 +2108,7 @@ function toolIcon(name){
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.__ext)+'</svg>';
 }
-function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page',ssh_exec:'Running SSH command',ssh_list_hosts:'Listing SSH hosts',git_clone:'Cloning repository',github_push_project:'Pushing to GitHub',github_pull_project:'Pulling from GitHub'}[name]||String(name||'').replace(/_/g,' '))}
+function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page',ssh_exec:'Running SSH command',ssh_list_hosts:'Listing SSH hosts',git_clone:'Cloning repository',github_create_repo:'Creating GitHub repository',github_push_project:'Pushing to GitHub',github_pull_project:'Pulling from GitHub'}[name]||String(name||'').replace(/_/g,' '))}
 /* Claude-style one-line labels: past tense + target, e.g. Searched "query" */
 function toolCompactLabel(t){
   const target=toolTarget(t.input)||"";
@@ -2127,6 +2127,7 @@ function toolCompactLabel(t){
     ssh_exec:'Ran command on '+(t.input?.host||short),
     ssh_list_hosts:'Listed SSH hosts',
     git_clone:'Cloned repository',
+    github_create_repo:'Created GitHub repository',
     github_push_project:'Pushed project to GitHub',
     github_pull_project:'Pulled from GitHub',
     github_whoami:'Checked GitHub account'
@@ -2330,14 +2331,59 @@ async function githubPullProject(ownerRepo){
   return `Pulled ${repo}@main (${headSha.slice(0,7)}): ${added} added, ${updated} updated, ${deleted} deleted`+(failed?`, ${failed} failed (left as-is)`:"");
 }
 
+/* Create a repository under the connected account and bootstrap its main
+   branch with the current project's files (empty-tree initial commit when
+   the project is empty) — push/pull work against it right after. */
+async function githubCreateRepo(name,opts={}){
+  saveGitHubSettings();
+  if(!state.githubToken)throw Error("GitHub token is not configured.");
+  const repoName=String(name||"").trim();
+  if(!/^[A-Za-z0-9_.-]{1,100}$/.test(repoName))throw Error("Invalid repository name (letters, digits, -, _, . only).");
+  const priv=opts.private!==false; // private unless explicitly told otherwise
+  const me=await githubRequest("GET","/user");
+  if(me.error||me.status<200||me.status>=300)throw Error("GitHub auth: "+me.body.slice(0,300));
+  const owner=JSON.parse(me.body).login;
+  const create=await githubRequest("POST","/user/repos",{name:repoName,private:priv,description:opts.description||"Created with NightCode"});
+  if(create.status===422)throw Error("Repository '"+repoName+"' already exists (or the name was rejected).");
+  if(create.error||create.status<200||create.status>=300)throw Error("GitHub create failed (token needs repo scope): "+create.body.slice(0,500));
+  // Bootstrap main: upload the current project, or commit an empty tree so
+  // the branch exists (a bare new repo has no refs at all).
+  const tree=[];
+  const listing=await fsCall("list");
+  if(!listing.error&&listing.result!=="NO_PROJECT"){
+    const paths=listing.result.split("\n").filter(p=>p&&!p.endsWith("/")&&!/^(\.git\/|build\/|\.gradle\/)/.test(p)).slice(0,500);
+    for(const path of paths){
+      const rr=await fsCall("readb64",path);
+      if(rr.error)continue;
+      const blob=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/blobs`,{content:rr.result,encoding:"base64"});
+      if(blob.error||blob.status<200||blob.status>=300)continue;
+      tree.push({path,mode:"100644",type:"blob",sha:JSON.parse(blob.body).sha});
+    }
+  }
+  const tr=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/trees`,{tree});
+  if(tr.error||tr.status<200||tr.status>=300)throw Error("GitHub tree: "+tr.body.slice(0,500));
+  const newTree=JSON.parse(tr.body).sha;
+  const cm=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/commits`,{message:"Initial commit from NightCode",tree:newTree,parents:[]});
+  if(cm.error||cm.status<200||cm.status>=300)throw Error("GitHub commit: "+cm.body.slice(0,500));
+  const sha=JSON.parse(cm.body).sha;
+  const ref=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/refs`,{ref:"refs/heads/main",sha});
+  if(ref.error||ref.status<200||ref.status>=300)throw Error("GitHub ref: "+ref.body.slice(0,500));
+  // Target the new repo by default so push/pull act on it immediately.
+  state.githubRepo=owner+"/"+repoName;
+  localStorage.setItem("githubRepo",state.githubRepo);
+  const el=$("githubRepoInput");if(el)el.value=state.githubRepo;
+  return "Created "+(priv?"private ":"")+"repository "+state.githubRepo+" (main @"+sha.slice(0,7)+", "+tree.length+" files committed)";
+}
 const GITHUB_TOOLS=[
   {name:"github_whoami",description:"Check the connected GitHub account.",input_schema:{type:"object",properties:{},required:[]}},
+  {name:"github_create_repo",description:"Create a new GitHub repository under the connected account and push the current project into it as the initial commit on main. Sets it as the active repository for push/pull. Use when the user asks to create/publish a new repository.",input_schema:{type:"object",properties:{name:{type:"string",description:"Repository name (letters, digits, -, _, .)"},private:{type:"boolean",description:"Create as private (default true)"},description:{type:"string",description:"Short repository description"}},required:["name"]}},
   {name:"github_push_project",description:"Commit the current NightCode project and push it to the configured GitHub repository on the main branch. Use only when the user asks to commit/push/sync to GitHub.",input_schema:{type:"object",properties:{repository:{type:"string",description:"owner/name; optional if configured in Settings"} ,message:{type:"string",description:"Commit message"}},required:[]}},
   {name:"github_pull_project",description:"Pull the configured GitHub repository (main branch) into the current NightCode project. Semantics are like reset --hard: remote files overwrite local ones and local files missing remotely are deleted. Warn the user about unsaved local changes before pulling. Use when the user asks to pull/update/sync from GitHub.",input_schema:{type:"object",properties:{repository:{type:"string",description:"owner/name; optional if configured in Settings"}},required:[]}}
 ];
 
 async function runGitHubTool(name,input){
   if(name==="github_whoami")return {result:(await githubVerify()).login||state.githubUser,error:false};
+  if(name==="github_create_repo")return {result:await githubCreateRepo(input?.name,{private:input?.private,description:input?.description}),error:false};
   if(name==="github_push_project")return {result:await githubPushProject(input?.repository,input?.message),error:false};
   if(name==="github_pull_project")return {result:await githubPullProject(input?.repository),error:false};
   return {result:"Unknown GitHub tool",error:true};
