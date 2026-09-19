@@ -416,6 +416,13 @@ class MainActivity : ComponentActivity() {
                         if (bytes == null) throw Exception("READ_FAILED")
                         result = String(bytes, Charsets.UTF_8)
                     }
+                    "readb64" -> {
+                        val f = target.findFileRecursive(path)
+                        if (f == null) throw Exception("FILE_NOT_FOUND")
+                        val bytes = contentResolver.openInputStream(f.uri)?.use { it.readBytes() }
+                        if (bytes == null) throw Exception("READ_FAILED")
+                        result = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    }
                     "write" -> {
                         val name = path.substringAfterLast('/')
                         val dir = resolveDir(target, path.substringBeforeLast('/', ""), create = true)
@@ -640,6 +647,11 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun fsRead(path: String, cb: String) { runFs("read", path, "", cb) }
 
+        /** Binary-safe read: raw bytes as base64. "read" decodes as UTF-8 text,
+         *  which silently corrupts images/archives — push MUST use this one. */
+        @JavascriptInterface
+        fun fsReadB64(path: String, cb: String) { runFs("readb64", path, "", cb) }
+
         @JavascriptInterface
         fun fsWrite(path: String, contentB64: String, cb: String) { runFs("write", path, contentB64, cb) }
 
@@ -664,10 +676,13 @@ class MainActivity : ComponentActivity() {
          * JSON: {"ok":true,"commit":"<sha>","branch":"<ref>","files":N}
          */
         @JavascriptInterface
-        fun gitClone(url: String, targetPath: String, cb: String) {
+        fun gitClone(url: String, targetPath: String, auth: String, cb: String) {
             beginRequest()
             Thread {
                 var payload: String
+                // Cache must be wiped on EVERY exit path — on failure it holds
+                // the full .git object store, which is pure disk-space waste.
+                val cache = File(cacheDir, "gitclone-tmp")
                 try {
                     val u = url.trim()
                     if (u.isEmpty()) throw Exception("EMPTY_URL")
@@ -690,7 +705,6 @@ class MainActivity : ComponentActivity() {
                     // tree (WITHOUT .git) into the SAF folder. JGit cannot run inside
                     // SAF storage directly, and the WebView tools ignore dotfolders,
                     // so a full clone with .git there would only waste space.
-                    val cache = File(cacheDir, "gitclone-tmp")
                     cache.deleteRecursively()
                     cache.mkdirs()
                     val cmd = Git.cloneRepository()
@@ -698,6 +712,13 @@ class MainActivity : ComponentActivity() {
                         .setDirectory(cache)
                         .setCloneAllBranches(false)
                         .setDepth(1)
+                    // Private repos: the GitHub token configured in settings rides
+                    // along as the HTTPS credential (x-access-token scheme).
+                    if (auth.isNotBlank()) {
+                        cmd.setCredentialsProvider(
+                            org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider("x-access-token", auth.trim())
+                        )
+                    }
                     try {
                         cmd.call()
                     } finally {
@@ -740,11 +761,12 @@ class MainActivity : ComponentActivity() {
                         if (refs.exists()) refs.readText().trim().split(Regex("\\s+")).firstOrNull() ?: "?"
                         else "?"
                     } catch (_: Exception) { "?" }
-                    cache.deleteRecursively()
                     payload = "{\"ok\":true,\"commit\":${jsonString(commit)}," +
                         "\"branch\":${jsonString(branch)},\"files\":$copied}"
                 } catch (e: Exception) {
                     payload = "{\"ok\":false,\"error\":${jsonString(e.message ?: e.toString())}}"
+                } finally {
+                    cache.deleteRecursively()
                 }
                 js("window.__gitResult && window.__gitResult(${jsonString(cb)}, $payload)")
                 endRequest()

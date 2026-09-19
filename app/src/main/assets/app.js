@@ -456,10 +456,11 @@ window.__gitResult=function(cbId,payload){
   cb(payload,false);
 };
 async function gitClone(url,targetPath){
-  const r=await fsCall("gitClone",String(url||"").trim(),String(targetPath||""));
+  // Private repos: ride the configured GitHub token as the HTTPS credential.
+  const r=await fsCall("gitClone",String(url||"").trim(),String(targetPath||""),state.githubToken||"");
   if(r.error||typeof r.result!=="object")return {result:"GIT_CLONE_FAILED: "+(typeof r.result==="string"?r.result:"bridge error"),error:true};
   const p=r.result;
-  if(!p.ok)return {result:"GIT_CLONE_FAILED: "+(p.error||"unknown"),error:true};
+  if(!p.ok)return {result:"GIT_CLONE_FAILED: "+(p.error||"unknown")+"\n(For private repos configure a GitHub token in Settings — it is used automatically.)",error:true};
   return {result:["Cloned successfully.","branch: "+(p.branch||"?"),"commit: "+String(p.commit||"?").slice(0,10),"files copied: "+p.files,"target: "+(targetPath||"project root")].join("\n"),error:false};
 }
 async function openProject(){
@@ -1470,7 +1471,7 @@ async function runTool(name,input){
       return r&&typeof r==="object"?r:{result:String(r),error:false};
     }catch(e){return {result:String(e&&e.message||e),error:true}}
   }
-  if(name==="github_whoami"||name==="github_push_project")return runGitHubTool(name,input||{});
+  if(name==="github_whoami"||name==="github_push_project"||name==="github_pull_project")return runGitHubTool(name,input||{});
   if(name==="web_search")return runWebSearch(input.query);
   if(name==="web_fetch"){
     let url=String(input.url||"").trim();
@@ -2107,7 +2108,7 @@ function toolIcon(name){
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.__ext)+'</svg>';
 }
-function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page',ssh_exec:'Running SSH command',ssh_list_hosts:'Listing SSH hosts',git_clone:'Cloning repository'}[name]||String(name||'').replace(/_/g,' '))}
+function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page',ssh_exec:'Running SSH command',ssh_list_hosts:'Listing SSH hosts',git_clone:'Cloning repository',github_push_project:'Pushing to GitHub',github_pull_project:'Pulling from GitHub'}[name]||String(name||'').replace(/_/g,' '))}
 /* Claude-style one-line labels: past tense + target, e.g. Searched "query" */
 function toolCompactLabel(t){
   const target=toolTarget(t.input)||"";
@@ -2124,7 +2125,11 @@ function toolCompactLabel(t){
     delete_file:'Deleted '+short,
     get_file_info:'Inspected '+short,
     ssh_exec:'Ran command on '+(t.input?.host||short),
-    ssh_list_hosts:'Listed SSH hosts'
+    ssh_list_hosts:'Listed SSH hosts',
+    git_clone:'Cloned repository',
+    github_push_project:'Pushed project to GitHub',
+    github_pull_project:'Pulled from GitHub',
+    github_whoami:'Checked GitHub account'
   };
   let label=map[t.name]||toolLabel(t.name);
   if(t.error)label+=" — failed";
@@ -2236,16 +2241,32 @@ async function githubPushProject(ownerRepo,message){
   if(!paths.length)throw Error("Project is empty.");
   const tree=[];
   for(const path of paths){
-    const rr=await fsCall("read",path);
+    // Binary-safe: raw bytes as base64 — UTF-8 decoding would corrupt
+    // images/archives beyond repair.
+    const rr=await fsCall("readb64",path);
     if(rr.error)continue;
-    const bytes=new TextEncoder().encode(rr.result);
-    let bin="";
-    const chunk=0x8000;
-    for(let i=0;i<bytes.length;i+=chunk)bin+=String.fromCharCode(...bytes.subarray(i,i+chunk));
-    const content=btoa(bin);
-    const blob=await githubRequest("POST","/repos/"+encodeURIComponent(owner)+"/"+encodeURIComponent(name)+"/git/blobs",{content,encoding:"base64"});
+    const blob=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/blobs`,{content:rr.result,encoding:"base64"});
     if(blob.error||blob.status<200||blob.status>=300)throw Error("Blob failed for "+path+": "+blob.body.slice(0,300));
     tree.push({path,mode:"100644",type:"blob",sha:JSON.parse(blob.body).sha});
+  }
+  // Deletions: files removed locally must vanish remotely too. The SAF
+  // listing caps at 500 entries — below that cap, remote-only blobs outside
+  // the ignore filters become sha:null tree entries, which GitHub deletes.
+  let deleted=0;
+  if(paths.length<500){
+    const rt=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees/${baseTree}?recursive=1`);
+    if(!rt.error&&rt.status>=200&&rt.status<300){
+      const rtj=JSON.parse(rt.body);
+      if(!rtj.truncated){
+        const localSet=new Set(paths);
+        for(const e of (rtj.tree||[])){
+          if(e.type==="blob"&&!localSet.has(e.path)&&!/^(\.git\/|build\/|\.gradle\/)/.test(e.path)){
+            tree.push({path:e.path,mode:e.mode||"100644",type:"blob",sha:null});
+            deleted++;
+          }
+        }
+      }
+    }
   }
   const tr=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees`,{base_tree:baseTree,tree});
   if(tr.error||tr.status<200||tr.status>=300)throw Error("Tree failed: "+tr.body.slice(0,500));
@@ -2255,17 +2276,70 @@ async function githubPushProject(ownerRepo,message){
   const newSha=JSON.parse(cm.body).sha;
   const up=await githubRequest("PATCH",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/refs/heads/${branch}`,{sha:newSha,force:false});
   if(up.error||up.status<200||up.status>=300)throw Error("Push failed: "+up.body.slice(0,500));
-  return "Pushed "+paths.length+" files to "+repo+" (main), commit "+newSha.slice(0,7);
+  return "Pushed "+paths.length+" files"+(deleted?", deleted "+deleted:"")+" to "+repo+" (main), commit "+newSha.slice(0,7);
+}
+/* Pull = reset --hard to origin/main: every remote file overwrites local,
+   local-only managed files are deleted. Binary-safe both directions
+   (base64 all the way). Report what actually changed. */
+async function githubPullProject(ownerRepo){
+  saveGitHubSettings();
+  if(!state.githubToken)throw Error("GitHub token is not configured.");
+  const repo=(ownerRepo||state.githubRepo||"").replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"").replace(/^\/+|\/+$/g,"");
+  if(!/^[^/]+\/[^/]+$/.test(repo))throw Error("Set repository as owner/name in GitHub settings.");
+  const [owner,name]=repo.split("/");
+  const ref=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/main`);
+  if(ref.status===404)throw Error("Branch 'main' was not found in "+repo+".");
+  if(ref.error||ref.status<200||ref.status>=300)throw Error("GitHub ref: "+ref.body.slice(0,500));
+  const headSha=JSON.parse(ref.body).object.sha;
+  const commit=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits/${headSha}`);
+  if(commit.error||commit.status<200||commit.status>=300)throw Error("GitHub commit: "+commit.body.slice(0,500));
+  const baseTree=JSON.parse(commit.body).tree.sha;
+  const tr=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees/${baseTree}?recursive=1`);
+  if(tr.error||tr.status<200||tr.status>=300)throw Error("GitHub tree: "+tr.body.slice(0,500));
+  const trj=JSON.parse(tr.body);
+  if(trj.truncated)throw Error("Repository tree too large for pull (truncated response).");
+  const remoteFiles=(trj.tree||[]).filter(e=>e.type==="blob"&&!/^(\.git\/|build\/|\.gradle\/)/.test(e.path));
+  const remoteSet=new Set(remoteFiles.map(e=>e.path));
+  let added=0,updated=0,failed=0;
+  for(const e of remoteFiles){
+    try{
+      const blob=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/blobs/${e.sha}`);
+      if(blob.error||blob.status<200||blob.status>=300){failed++;continue}
+      const bj=JSON.parse(blob.body);
+      if(bj.encoding!=="base64"){failed++;continue}
+      const content=String(bj.content||"").replace(/\s+/g,"");
+      const local=await fsCall("readb64",e.path);
+      if(!local.error&&local.result===content)continue; // unchanged, skip write
+      const w=await fsCall("write",e.path,content);
+      if(w.error){failed++;continue}
+      if(local.error)added++;else updated++;
+    }catch(_){failed++}
+  }
+  let deleted=0;
+  const listing=await fsCall("list");
+  if(!listing.error&&listing.result!=="NO_PROJECT"){
+    const locals=listing.result.split("\n").filter(p=>p&&!p.endsWith("/")&&!/^(\.git\/|build\/|\.gradle\/)/.test(p));
+    if(locals.length<500){
+      for(const p of locals){
+        if(remoteSet.has(p))continue;
+        const d=await fsCall("delete",p);
+        if(!d.error)deleted++;
+      }
+    }
+  }
+  return `Pulled ${repo}@main (${headSha.slice(0,7)}): ${added} added, ${updated} updated, ${deleted} deleted`+(failed?`, ${failed} failed (left as-is)`:"");
 }
 
 const GITHUB_TOOLS=[
   {name:"github_whoami",description:"Check the connected GitHub account.",input_schema:{type:"object",properties:{},required:[]}},
-  {name:"github_push_project",description:"Commit the current NightCode project and push it to the configured GitHub repository on the main branch. Use only when the user asks to commit/push/sync to GitHub.",input_schema:{type:"object",properties:{repository:{type:"string",description:"owner/name; optional if configured in Settings"} ,message:{type:"string",description:"Commit message"}},required:[]}}
+  {name:"github_push_project",description:"Commit the current NightCode project and push it to the configured GitHub repository on the main branch. Use only when the user asks to commit/push/sync to GitHub.",input_schema:{type:"object",properties:{repository:{type:"string",description:"owner/name; optional if configured in Settings"} ,message:{type:"string",description:"Commit message"}},required:[]}},
+  {name:"github_pull_project",description:"Pull the configured GitHub repository (main branch) into the current NightCode project. Semantics are like reset --hard: remote files overwrite local ones and local files missing remotely are deleted. Warn the user about unsaved local changes before pulling. Use when the user asks to pull/update/sync from GitHub.",input_schema:{type:"object",properties:{repository:{type:"string",description:"owner/name; optional if configured in Settings"}},required:[]}}
 ];
 
 async function runGitHubTool(name,input){
   if(name==="github_whoami")return {result:(await githubVerify()).login||state.githubUser,error:false};
   if(name==="github_push_project")return {result:await githubPushProject(input?.repository,input?.message),error:false};
+  if(name==="github_pull_project")return {result:await githubPullProject(input?.repository),error:false};
   return {result:"Unknown GitHub tool",error:true};
 }
 
