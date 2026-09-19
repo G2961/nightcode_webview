@@ -2268,18 +2268,26 @@ async function githubPushProject(ownerRepo,message){
   if(!/^[^/]+\/[^/]+$/.test(repo))throw Error("Set repository as owner/name in GitHub settings.");
   const [owner,name]=repo.split("/");
   const branch="main";
+  // A repo without commits answers 409 "Git Repository is empty." on every
+  // ref call; a repo with commits but no main answers 404. Both mean:
+  // bootstrap an initial commit instead of updating an existing head.
   const ref=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${branch}`);
-  if(ref.status===404)throw Error("Branch 'main' was not found in "+repo+" — либо её нет, либо токен не видит этот репозиторий ("+tokenHint(state.githubToken)+"). Можно создать репо тулом github_create_repo.");
-  if(ref.error||ref.status<200||ref.status>=300)throw Error(ghErr(ref,"GitHub ref failed."));
-  const refData=JSON.parse(ref.body), headSha=refData.object.sha;
-  const commit=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits/${headSha}`);
-  if(commit.error||commit.status<200||commit.status>=300)throw Error(ghErr(commit,"GitHub commit failed."));
-  const baseTree=JSON.parse(commit.body).tree.sha;
+  const refOk=!ref.error&&ref.status>=200&&ref.status<300;
+  let headSha=null,baseTree=null;
+  if(refOk){
+    headSha=JSON.parse(ref.body).object.sha;
+    const commit=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits/${headSha}`);
+    if(commit.error||commit.status<200||commit.status>=300)throw Error(ghErr(commit,"GitHub commit failed."));
+    baseTree=JSON.parse(commit.body).tree.sha;
+  }else if(ref.status!==404&&ref.status!==409){
+    if(ref.status===403)throw Error("Токен не видит этот репозиторий ("+tokenHint(state.githubToken)+").");
+    throw Error(ghErr(ref,"GitHub ref failed."));
+  }
 
   const listing=await fsCall("fsList","");
   if(listing.error)throw Error("Cannot list project: "+listing.result);
   const paths=listing.result.split("\n").filter(p=>p&&!p.endsWith("/")&&!/^(\.git\/|build\/|\.gradle\/)/.test(p));
-  if(!paths.length)throw Error("Project is empty.");
+  if(!paths.length&&!headSha)throw Error("Project is empty and "+repo+" has no commits — напиши хотя бы один файл перед пушем.");
   const tree=[];
   for(const path of paths){
     // Binary-safe: raw bytes as base64 — UTF-8 decoding would corrupt
@@ -2294,7 +2302,7 @@ async function githubPushProject(ownerRepo,message){
   // listing caps at 500 entries — below that cap, remote-only blobs outside
   // the ignore filters become sha:null tree entries, which GitHub deletes.
   let deleted=0;
-  if(paths.length<500){
+  if(baseTree&&paths.length<500){
     const rt=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees/${baseTree}?recursive=1`);
     if(!rt.error&&rt.status>=200&&rt.status<300){
       const rtj=JSON.parse(rt.body);
@@ -2309,14 +2317,30 @@ async function githubPushProject(ownerRepo,message){
       }
     }
   }
-  const tr=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees`,{base_tree:baseTree,tree});
+  // GitHub rejects an empty tree on a repo with no commits (409) — seed a
+  // README.md so the initial commit exists.
+  if(!baseTree&&!tree.length){
+    const seed="# "+name+"\n\nCreated with NightCode.\n";
+    const blob=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/blobs`,{content:btoa(unescape(encodeURIComponent(seed))),encoding:"base64"});
+    if(blob.error||blob.status<200||blob.status>=300)throw Error(ghErr(blob,"Blob upload failed for README.md."));
+    tree.push({path:"README.md",mode:"100644",type:"blob",sha:JSON.parse(blob.body).sha});
+  }
+  const tr=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees`,baseTree?{base_tree:baseTree,tree}:{tree});
   if(tr.error||tr.status<200||tr.status>=300)throw Error(ghErr(tr,"GitHub tree failed."));
   const newTree=JSON.parse(tr.body).sha;
-  const cm=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits`,{message:message||"Update from NightCode",tree:newTree,parents:[headSha]});
+  const cm=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits`,baseTree?{message:message||"Update from NightCode",tree:newTree,parents:[headSha]}:{message:message||"Initial commit from NightCode",tree:newTree,parents:[]});
   if(cm.error||cm.status<200||cm.status>=300)throw Error(ghErr(cm,"GitHub commit failed."));
   const newSha=JSON.parse(cm.body).sha;
-  const up=await githubRequest("PATCH",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/refs/heads/${branch}`,{sha:newSha,force:false});
-  if(up.error||up.status<200||up.status>=300)throw Error(ghErr(up,"Push failed."));
+  const up=baseTree
+    ?await githubRequest("PATCH",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/refs/heads/${branch}`,{sha:newSha,force:false})
+    :await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/refs`,{ref:"refs/heads/"+branch,sha:newSha});
+  if((up.error||up.status<200||up.status>=300)&&!baseTree){
+    // Race: the branch appeared between our ref check and now — update it.
+    const up2=await githubRequest("PATCH",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/refs/heads/${branch}`,{sha:newSha,force:false});
+    if(up2.error||up2.status<200||up2.status>=300)throw Error(ghErr(up2,"Push failed."));
+  }else if(up.error||up.status<200||up.status>=300){
+    throw Error(ghErr(up,"Push failed."));
+  }
   return "Pushed "+paths.length+" files"+(deleted?", deleted "+deleted:"")+" to "+repo+" (main), commit "+newSha.slice(0,7);
 }
 /* Pull = reset --hard to origin/main: every remote file overwrites local,
@@ -2330,6 +2354,7 @@ async function githubPullProject(ownerRepo){
   const [owner,name]=repo.split("/");
   const ref=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/main`);
   if(ref.status===404)throw Error("Branch 'main' was not found in "+repo+".");
+  if(ref.status===409)throw Error("Репозиторий "+repo+" пуст — нечего тянуть. Сначала сделай github_push_project.");
   if(ref.error||ref.status<200||ref.status>=300)throw Error(ghErr(ref,"GitHub ref failed."));
   const headSha=JSON.parse(ref.body).object.sha;
   const commit=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits/${headSha}`);
@@ -2417,6 +2442,14 @@ async function githubCreateRepo(name,opts={}){
       if(blob.error||blob.status<200||blob.status>=300)throw Error(repoErr(blob,"Blob upload failed for "+path+"."));
       tree.push({path,mode:"100644",type:"blob",sha:JSON.parse(blob.body).sha});
     }
+  }
+  // An empty tree on a repo with no commits is rejected (409 "Git
+  // Repository is empty.") — seed a README so main can be born.
+  if(!tree.length){
+    const seed="# "+repoName+"\n\nCreated with NightCode.\n";
+    const blob=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/blobs`,{content:btoa(unescape(encodeURIComponent(seed))),encoding:"base64"});
+    if(blob.error||blob.status<200||blob.status>=300)throw Error(repoErr(blob,"Blob upload failed for README.md."));
+    tree.push({path:"README.md",mode:"100644",type:"blob",sha:JSON.parse(blob.body).sha});
   }
   const tr=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/trees`,{tree});
   if(tr.error||tr.status<200||tr.status>=300)throw Error(repoErr(tr,"GitHub tree failed."));
