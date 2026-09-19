@@ -76,6 +76,10 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .user .bubble{background:linear-gradient(180deg,#282c3d,#20232f);border-color:#363c5e;border-bottom-right-radius:6px;max-width:85%;box-shadow:0 3px 14px rgba(60,66,120,.18)}
 .message.assistant .bubble{border-bottom-left-radius:6px}
 .message.assistant{margin-right:8%}
+/* Interleaved turns: several bubbles + tool cards share one message block. */
+.message .bubble+.bubble{margin-top:8px}
+.message .bubble+details{margin-top:6px}
+.message details+.bubble{margin-top:8px}
 .msg-time{font-size:10px;color:var(--text-3);margin:4px 8px 0;-webkit-user-select:none;user-select:none}
 .message.user .msg-time{order:2}
 .msg-actions{display:flex;gap:2px;margin:4px 8px 0;opacity:0;max-height:0;overflow:hidden;transition:opacity .15s,max-height .15s;-webkit-user-select:none;user-select:none}

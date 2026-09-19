@@ -181,7 +181,13 @@ function messageHtml(m,idx){
   }).join("");
   const showBubble=m.text||m.role!=="user";
   if(!showBubble)return `<div class="message ${m.role}">${files}</div>`;
-  const tools=(m.tools||[]).map(t=>`<details class="tool-activity compact"><summary class="tool-activity-head"><div class="tool-activity-icon sm">${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolCompactLabel(t))}</div></div><div class="reasoning-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></summary><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></details>`).join("");
+  // Agent-style tool card. Open by default: executed commands must be visible
+  // without an extra tap; the chevron still allows collapsing manually.
+  const toolCard=t=>`<details class="tool-activity compact" open><summary class="tool-activity-head"><div class="tool-activity-icon sm">${toolIcon(t.name)}</div><div class="tool-activity-text"><div class="tool-activity-title">${esc(toolCompactLabel(t))}</div></div><div class="reasoning-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></summary><div class="tool-preview">${toolPreview(t.name,t.input,t.result)}</div></details>`;
+  // New turns record m.segments — the real execution order (text → tool →
+  // text → tool). Legacy turns fall back to all-tools-then-bubble layout.
+  const interleaved=m.role==="assistant"&&m.segments&&m.segments.length;
+  const tools=interleaved?[]:(m.tools||[]).map(t=>toolCard(t)).join("");
   const time=m.ts?`<div class="msg-time">${new Date(m.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div>`:"";
   // Thinking arrives as its own field (collected from the API's thinking blocks) —
   // rendered as an agent-style collapsible card ABOVE the bubble. Never merged
@@ -210,7 +216,15 @@ function messageHtml(m,idx){
     <span class="msg-variant-count">${sib.index}/${sib.total}</span>
     <button class="msg-act-btn" data-act="nextVariant" ${sib.index>=sib.total?"disabled":""} aria-label="Next variant"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
   </div>`:"";
-  return `<div class="message ${m.role}" data-idx="${idx}">${files}${tools}${reasoningHtml}<div class="bubble">${bubbleHtml}</div>${time}${switcherHtml}${actions}</div>`;
+  // Interleaved: every model remark is its own bubble in execution order, with
+  // tool cards inline between them — "I'll look into it" → command → result →
+  // "done", instead of all text lumped into one bubble after the fact.
+  const contentHtml=interleaved
+    ?m.segments.map(seg=>seg.t==="text"
+      ?`<div class="bubble">${md(seg.s,{reasoningDurationMs:m.reasoning})}</div>`
+      :toolCard(seg)).join("")
+    :`<div class="bubble">${bubbleHtml}</div>`;
+  return `<div class="message ${m.role}" data-idx="${idx}">${files}${tools}${reasoningHtml}${contentHtml}${time}${switcherHtml}${actions}</div>`;
 }
 function render(){
   const chat=$("chat");
@@ -975,6 +989,9 @@ async function send(override,targetId){
       :"You are NightCode, a helpful AI assistant. There is no project folder connected, so do not assume access to local files. You have the web_search tool — use it only when the user's question actually needs current information; do not search proactively on greetings or general chat. Cite source URLs when you do search.")
       +(state.summary?`\nConversation summary:\n${state.summary}\nContinue the same conversation.`:"");
     let final="";const toolCalls=[];let allThinking="";
+    // Execution-order record: text remark → tool run → next remark … Rendered
+    // interleaved by messageHtml; m.text/m.tools stay for history/copy compat.
+    const segments=[];
     let liveCard=null;
     // Live answer bubble: text tokens render in place as they stream, so the
     // answer appears WHILE the model works — not as one lump at the very end.
@@ -1157,6 +1174,7 @@ async function send(override,targetId){
           const note=apiErrMsg(r.status,r.errMsg||r.body);
           const lm=commitAssistantReply(partial||(note?"⚠️ "+note+".":"⚠️ Поток оборвался после размышлений (HTTP "+r.status+"). Попробуй ещё раз."),targetId);
           if(allThinking)lm.thinking=allThinking;
+          if(segments.length)lm.segments=segments;
           lm.reasoning=Date.now()-started;save();render();
           return;
         }
@@ -1184,6 +1202,7 @@ async function send(override,targetId){
       // already accumulated into allThinking as they streamed in above.
       const text=content.filter(x=>x.type==="text").map(x=>x.text).join("\n");
       if(text)final+=(final?"\n\n":"")+text;
+      if(text.trim())segments.push({t:"text",s:text});
       // Stream-level failures (rate limits etc.) arrive as SSE "error" events
       // and end the stream looking "successful" — surface them explicitly
       // instead of falling through to a confusing empty/async reply.
@@ -1206,6 +1225,7 @@ async function send(override,targetId){
         }catch(e){out=String(e.message||e);err=true;activity.update(out,true)}
         fireExt("tool",{name:u.name,input:u.input||{},result:String(out),error:err});
         toolCalls.push({name:u.name,input:u.input||{},result:String(out),error:err});
+        segments.push({t:"tool",name:u.name,input:u.input||{},result:String(out),error:err});
         results.push({type:"tool_result",tool_use_id:u.id,is_error:err,content:String(out)});
       }
       // Stopped mid-tool-loop: commit what exists; don't feed partial results
@@ -1215,6 +1235,7 @@ async function send(override,targetId){
         const lm=commitAssistantReply(final.trim()||"⏹ Generation stopped.",targetId);
         if(allThinking)lm.thinking=allThinking;
         if(toolCalls.length)lm.tools=toolCalls;
+        if(segments.length)lm.segments=segments;
         lm.reasoning=Date.now()-started;save();render();
         return;
       }
@@ -1230,6 +1251,7 @@ async function send(override,targetId){
     last.reasoning=Date.now()-started;
     if(allThinking.trim())last.thinking=allThinking.trim();
     if(toolCalls.length)last.tools=toolCalls;
+    if(segments.length)last.segments=segments;
     save();render();
   }catch(e){
     removeTyping();
@@ -1240,6 +1262,7 @@ async function send(override,targetId){
     if(typeof allThinking!=='undefined'&&allThinking||typeof final!=='undefined'&&final.trim()){
       const lm=commitAssistantReply((final&&final.trim())||"⚠️ "+(e.message||e),targetId);
       if(typeof allThinking!=='undefined'&&allThinking)lm.thinking=allThinking;
+      if(typeof segments!=="undefined"&&segments.length)lm.segments=segments;
       lm.reasoning=Date.now()-started;save();render();
     }else{
       commitAssistantReply("Error: "+(e.message||e),targetId);
