@@ -98,7 +98,7 @@ function md(s,opts={}){
   for(const [open,close] of THINK_TAGS){
     const re=new RegExp(`<${open}(\\s[^>]*)?>\s*([\s\S]*?)\s*</${close}(\s[^>]*)?>`,"gi");
     t=t.replace(re,(_,__,thought)=>
-      placeholder(`<details class="reasoning-block"><summary><span class="reasoning-label">Reasoning</span><span class="reasoning-time">Thought for ${formatReasoningTime(opts.reasoningDurationMs)}</span></summary><pre>${esc(thought.trim())}</pre></details>`));
+      placeholder(`<details class="reasoning-block" open><summary><span class="reasoning-label">Reasoning</span><span class="reasoning-time">Thought for ${formatReasoningTime(opts.reasoningDurationMs)}</span></summary><pre>${esc(thought.trim())}</pre></details>`));
     // Truncated/dangling tag: strip the tag itself, keep the text out of the UI.
     t=t.replace(new RegExp(`</?${open}(\\s[^>]*)?>`,"gi"),"");
   }
@@ -202,7 +202,7 @@ function messageHtml(m,idx){
     }
     if(thinking){
       const dur=m.reasoning?formatReasoningTime(m.reasoning):null;
-      reasoningHtml=`<details class="tool-activity compact reasoning-card"><summary class="tool-activity-head"><div class="tool-activity-icon sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4.5 4.5 0 0 0-4.5 4.5c0 .7.2 1.4.5 2A4 4 0 0 0 5 13.5 4 4 0 0 0 9 17.5h.5A3.5 3.5 0 0 0 12 20a3.5 3.5 0 0 0 2.5-2.5H15a4 4 0 0 0 4-4 4 4 0 0 0-3-3.8c.3-.6.5-1.3.5-2A4.5 4.5 0 0 0 12 3z"/></svg></div><div class="tool-activity-text"><div class="tool-activity-title">Thinking</div><div class="tool-activity-sub">Thought for ${dur||"a moment"}</div></div><div class="reasoning-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></summary><div class="tool-preview"><pre>${esc(thinking)}</pre></div></details>`;
+      reasoningHtml=`<details class="tool-activity compact reasoning-card" open><summary class="tool-activity-head"><div class="tool-activity-icon sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4.5 4.5 0 0 0-4.5 4.5c0 .7.2 1.4.5 2A4 4 0 0 0 5 13.5 4 4 0 0 0 9 17.5h.5A3.5 3.5 0 0 0 12 20a3.5 3.5 0 0 0 2.5-2.5H15a4 4 0 0 0 4-4 4 4 0 0 0-3-3.8c.3-.6.5-1.3.5-2A4.5 4.5 0 0 0 12 3z"/></svg></div><div class="tool-activity-text"><div class="tool-activity-title">Thinking</div><div class="tool-activity-sub">Thought for ${dur||"a moment"}</div></div><div class="reasoning-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></summary><div class="tool-preview"><pre>${esc(thinking)}</pre></div></details>`;
     }
   }
   const bodyText=m.text;
@@ -2181,8 +2181,10 @@ function showToolActivity(name,input){
     update(result,error){
       const status=title.querySelector(".tool-activity-status");
       if(status)status.innerHTML=error?'<span class="tool-error">!</span>':'<span class="tool-done">✓</span>';
+      // Live cards never auto-collapse: what the agent did must stay visible.
+      const tt=title.querySelector(".tool-activity-title");
+      if(tt)tt.textContent=toolCompactLabel({name,input,error});
       preview.innerHTML=toolPreview(name,input,result);
-      card.open=false;
       autoScroll();
     }
   };
@@ -2369,6 +2371,12 @@ async function githubCreateRepo(name,opts={}){
   const create=await githubRequest("POST","/user/repos",{name:repoName,private:priv,description:opts.description||"Created with NightCode"});
   if(create.status===422)throw Error("Repository '"+repoName+"' already exists (or the name was rejected).");
   if(create.error||create.status<200||create.status>=300)throw Error(ghErr(create,"Создание репозитория не удалось."));
+  // Fine-grained tokens only see repos selected at token creation — a repo
+  // born seconds ago is invisible to them (404 on every follow-up call).
+  const repoErr=(r,label)=>{
+    if(r&&r.status===404)return "Репозиторий создан, но токен не имеет к нему доступа. Fine-grained-токены (github_pat_) видят только репозитории, выбранные при их создании — включи в настройках токена «All repositories», либо используй classic-токен ghp_ со scope repo. ("+label+")";
+    return ghErr(r,label);
+  };
   // Bootstrap main: upload the current project, or commit an empty tree so
   // the branch exists (a bare new repo has no refs at all).
   const tree=[];
@@ -2379,18 +2387,18 @@ async function githubCreateRepo(name,opts={}){
       const rr=await fsCall("readb64",path);
       if(rr.error)continue;
       const blob=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/blobs`,{content:rr.result,encoding:"base64"});
-      if(blob.error||blob.status<200||blob.status>=300)throw Error(ghErr(blob,"Blob upload failed for "+path+"."));
+      if(blob.error||blob.status<200||blob.status>=300)throw Error(repoErr(blob,"Blob upload failed for "+path+"."));
       tree.push({path,mode:"100644",type:"blob",sha:JSON.parse(blob.body).sha});
     }
   }
   const tr=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/trees`,{tree});
-  if(tr.error||tr.status<200||tr.status>=300)throw Error(ghErr(tr,"GitHub tree failed."));
+  if(tr.error||tr.status<200||tr.status>=300)throw Error(repoErr(tr,"GitHub tree failed."));
   const newTree=JSON.parse(tr.body).sha;
   const cm=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/commits`,{message:"Initial commit from NightCode",tree:newTree,parents:[]});
-  if(cm.error||cm.status<200||cm.status>=300)throw Error(ghErr(cm,"GitHub commit failed."));
+  if(cm.error||cm.status<200||cm.status>=300)throw Error(repoErr(cm,"GitHub commit failed."));
   const sha=JSON.parse(cm.body).sha;
   const ref=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/refs`,{ref:"refs/heads/main",sha});
-  if(ref.error||ref.status<200||ref.status>=300)throw Error(ghErr(ref,"GitHub ref failed."));
+  if(ref.error||ref.status<200||ref.status>=300)throw Error(repoErr(ref,"GitHub ref failed."));
   // Target the new repo by default so push/pull act on it immediately.
   state.githubRepo=owner+"/"+repoName;
   localStorage.setItem("githubRepo",state.githubRepo);
