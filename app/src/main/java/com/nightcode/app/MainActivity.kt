@@ -13,6 +13,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import java.net.HttpURLConnection
+import java.net.Socket
 import java.net.URL
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
