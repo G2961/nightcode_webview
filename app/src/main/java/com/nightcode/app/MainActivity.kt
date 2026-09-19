@@ -525,6 +525,138 @@ class MainActivity : ComponentActivity() {
         return dir.findFile(parts.last())
     }
 
+    // ── DNS-over-HTTPS for poisoned resolvers ─────────────────────────────
+    // Some ISPs return bogus IPs for GitHub hosts; the browser survives on its
+    // own secure DNS while HttpURLConnection uses the poisoned system one.
+    // Resolve via DoH providers reached BY IP (no DNS involved), then connect
+    // to the real IP with SNI and strict hostname verification.
+    private val dohSuffixes = listOf("github.com", "githubusercontent.com", "githubassets.com", "github.io")
+    private val dohCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, String>>()
+
+    private fun needsDoh(host: String): Boolean =
+        dohSuffixes.any { host == it || host.endsWith(".$it") }
+
+    private fun dohResolve(host: String): String? {
+        dohCache[host]?.let { (until, ip) -> if (System.currentTimeMillis() < until) return ip }
+        for (u in listOf(
+            "https://1.1.1.1/dns-query?name=$host&type=A",
+            "https://8.8.8.8/resolve?name=$host&type=A"
+        )) {
+            try {
+                val c = URL(u).openConnection() as javax.net.ssl.HttpsURLConnection
+                c.connectTimeout = 5000
+                c.readTimeout = 5000
+                c.setRequestProperty("accept", "application/dns-json")
+                val body = c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+                val ans = org.json.JSONObject(body).optJSONArray("Answer") ?: continue
+                for (i in 0 until ans.length()) {
+                    val o = ans.optJSONObject(i) ?: continue
+                    if (o.optInt("type") == 1) {
+                        val d = o.optString("data", "")
+                        if (Regex("^\\d{1,3}(\\.\\d{1,3}){3}$").matches(d)) {
+                            dohCache[host] = System.currentTimeMillis() + 10 * 60 * 1000L to d
+                            return d
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return null
+    }
+
+    /** SSLSocketFactory that always sends the REAL hostname as SNI, even when
+     *  the TCP connection goes to a bare IP from the DoH answer. */
+    private fun sniFactory(realHost: String): javax.net.ssl.SSLSocketFactory {
+        val base = javax.net.ssl.HttpsURLConnection.getDefaultSSLSocketFactory()
+        return object : javax.net.ssl.SSLSocketFactory() {
+            private fun tune(s: Socket): Socket {
+                try {
+                    val ssl = s as javax.net.ssl.SSLSocket
+                    val p = ssl.sslParameters
+                    p.serverNames = listOf(javax.net.ssl.SNIHostName(realHost))
+                    ssl.sslParameters = p
+                } catch (_: Exception) {}
+                return s
+            }
+            override fun getDefaultCipherSuites(): Array<String> = base.defaultCipherSuites
+            override fun getSupportedCipherSuites(): Array<String> = base.supportedCipherSuites
+            override fun createSocket(s: Socket, host: String, port: Int, autoClose: Boolean): Socket =
+                tune(base.createSocket(s, host, port, autoClose))
+            override fun createSocket(host: String, port: Int): Socket = tune(base.createSocket(host, port))
+            override fun createSocket(host: String, port: Int, localHost: java.net.InetAddress, localPort: Int): Socket =
+                tune(base.createSocket(host, port, localHost, localPort))
+            override fun createSocket(address: java.net.InetAddress, port: Int): Socket =
+                tune(base.createSocket(address, port))
+            override fun createSocket(address: java.net.InetAddress, port: Int, localAddress: java.net.InetAddress, localPort: Int): Socket =
+                tune(base.createSocket(address, port, localAddress, localPort))
+        }
+    }
+
+    private fun openMaybeDoh(urlStr: String): HttpURLConnection {
+        val u = URL(urlStr)
+        val host = u.host
+        if (!needsDoh(host)) return u.openConnection() as HttpURLConnection
+        val ip = dohResolve(host) ?: return u.openConnection() as HttpURLConnection
+        val c = URL(u.protocol, ip, u.port, u.file).openConnection() as javax.net.ssl.HttpsURLConnection
+        c.sslSocketFactory = sniFactory(host)
+        c.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, session ->
+            try {
+                javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(host, session)
+            } catch (_: Exception) { false }
+        }
+        try { c.setRequestProperty("Host", host) } catch (_: Exception) {}
+        return c
+    }
+
+    private fun mimeFor(name: String): String = when {
+        name.endsWith(".svg") -> "image/svg+xml"
+        name.endsWith(".png") -> "image/png"
+        name.endsWith(".jpg") || name.endsWith(".jpeg") -> "image/jpeg"
+        name.endsWith(".gif") -> "image/gif"
+        name.endsWith(".ico") -> "image/x-icon"
+        name.endsWith(".webp") -> "image/webp"
+        else -> "application/octet-stream"
+    }
+
+    /** Clone fallback for blocked networks: repo zipball via the GitHub API,
+     *  over the DoH bridge. Unpacks into the SAF target folder. */
+    private fun zipballInto(zipUrl: String, auth: String, destDir: DocumentFile): Int {
+        val c = openMaybeDoh(zipUrl) as javax.net.ssl.HttpsURLConnection
+        c.connectTimeout = 30000
+        c.readTimeout = 180000
+        c.instanceFollowRedirects = true
+        if (auth.isNotBlank()) c.setRequestProperty("Authorization", "Bearer " + auth.trim())
+        c.setRequestProperty("User-Agent", "NightCode")
+        val code = c.responseCode
+        if (code !in 200..299) throw Exception("HTTP $code")
+        var copied = 0
+        java.util.zip.ZipInputStream(java.io.BufferedInputStream(c.inputStream, 1 shl 16)).use { zin ->
+            while (true) {
+                val en = zin.nextEntry ?: break
+                val rel = en.name.substringAfter('/', "")
+                if (!en.isDirectory && rel.isNotEmpty()) {
+                    val parts = rel.split('/')
+                    if (parts.none { it == ".." }) {
+                        var parent: DocumentFile? = destDir
+                        for (seg in parts.dropLast(1)) {
+                            parent = parent?.findFile(seg) ?: parent?.createDirectory(seg)
+                            if (parent == null) break
+                        }
+                        val f = parent?.createFile(mimeFor(parts.last()), parts.last())
+                        if (f != null) {
+                            contentResolver.openOutputStream(f.uri, "wt")?.use { out ->
+                                zin.copyTo(out, 64 * 1024)
+                            }
+                            copied++
+                        }
+                    }
+                }
+                zin.closeEntry()
+            }
+        }
+        return copied
+    }
+
     inner class AndroidBridge {
         // cb id -> live connection, so a stream can be aborted from JS mid-flight.
         private val activeStreams = java.util.concurrent.ConcurrentHashMap<String, HttpURLConnection>()
@@ -707,62 +839,68 @@ class MainActivity : ComponentActivity() {
                     // so a full clone with .git there would only waste space.
                     cache.deleteRecursively()
                     cache.mkdirs()
-                    val cmd = Git.cloneRepository()
-                        .setURI(u)
-                        .setDirectory(cache)
-                        .setCloneAllBranches(false)
-                        .setDepth(1)
-                    // Private repos: the GitHub token configured in settings rides
-                    // along as the HTTPS credential (x-access-token scheme).
-                    if (auth.isNotBlank()) {
-                        cmd.setCredentialsProvider(
-                            org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider("x-access-token", auth.trim())
-                        )
-                    }
                     try {
-                        cmd.call()
-                    } finally {
-                        // Some JGit versions leave the FS lock held; clear before copy.
-                        File(cache, ".git/index.lock").delete()
-                    }
-                    var copied = 0
-                    fun copyRec(src: File, dstParent: DocumentFile) {
-                        for (f in src.listFiles() ?: return) {
-                            if (f.name == ".git") continue
-                            val dest = if (f.isDirectory) {
-                                dstParent.createDirectory(f.name)
-                            } else {
-                                val mime = if (f.name.endsWith(".svg")) "image/svg+xml"
-                                    else if (f.name.endsWith(".png")) "image/png"
-                                    else if (f.name.endsWith(".jpg") || f.name.endsWith(".jpeg")) "image/jpeg"
-                                    else if (f.name.endsWith(".gif")) "image/gif"
-                                    else if (f.name.endsWith(".ico")) "image/x-icon"
-                                    else if (f.name.endsWith(".webp")) "image/webp"
-                                    else "application/octet-stream"
-                                dstParent.createFile(mime, f.name)
-                            } ?: continue
-                            if (f.isDirectory) copyRec(f, dest)
-                            else {
-                                contentResolver.openOutputStream(dest.uri, "wt")?.use { out ->
-                                    f.inputStream().use { it.copyTo(out, 64 * 1024) }
+                        val cmd = Git.cloneRepository()
+                            .setURI(u)
+                            .setDirectory(cache)
+                            .setCloneAllBranches(false)
+                            .setDepth(1)
+                        // Private repos: the GitHub token configured in settings rides
+                        // along as the HTTPS credential (x-access-token scheme).
+                        if (auth.isNotBlank()) {
+                            cmd.setCredentialsProvider(
+                                org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider("x-access-token", auth.trim())
+                            )
+                        }
+                        try {
+                            cmd.call()
+                        } finally {
+                            // Some JGit versions leave the FS lock held; clear before copy.
+                            File(cache, ".git/index.lock").delete()
+                        }
+                        var copied = 0
+                        fun copyRec(src: File, dstParent: DocumentFile) {
+                            for (f in src.listFiles() ?: return) {
+                                if (f.name == ".git") continue
+                                val dest = if (f.isDirectory) {
+                                    dstParent.createDirectory(f.name)
+                                } else {
+                                    dstParent.createFile(mimeFor(f.name), f.name)
+                                } ?: continue
+                                if (f.isDirectory) copyRec(f, dest)
+                                else {
+                                    contentResolver.openOutputStream(dest.uri, "wt")?.use { out ->
+                                        f.inputStream().use { it.copyTo(out, 64 * 1024) }
+                                    }
+                                    copied++
                                 }
-                                copied++
                             }
                         }
+                        copyRec(cache, destDir)
+                        val head = File(cache, ".git/HEAD")
+                        val branch = if (head.exists()) {
+                            val h = head.readText().trim()
+                            if (h.startsWith("ref:")) h.removePrefix("ref:").trim().substringAfterLast('/') else "detached"
+                        } else "?"
+                        val commit = try {
+                            val refs = File(cache, ".git/FETCH_HEAD")
+                            if (refs.exists()) refs.readText().trim().split(Regex("\\s+")).firstOrNull() ?: "?"
+                            else "?"
+                        } catch (_: Exception) { "?" }
+                        payload = "{\"ok\":true,\"commit\":${jsonString(commit)}," +
+                            "\"branch\":${jsonString(branch)},\"files\":$copied,\"method\":\"git\"}"
+                    } catch (je: Exception) {
+                        // Direct clone failed — frequently DNS poisoning of github.com
+                        // on some networks. Fall back to the API zipball over DoH.
+                        val m = Regex("github\\.com[/:]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\\.git)?/?$")
+                            .find(u.trim().removeSuffix("/"))
+                        if (m == null) throw je
+                        val copied = zipballInto(
+                            "https://api.github.com/repos/${m.groupValues[1]}/${m.groupValues[2]}/zipball",
+                            auth, destDir
+                        )
+                        payload = "{\"ok\":true,\"commit\":\"?\",\"branch\":\"default\",\"files\":$copied,\"method\":\"zipball\"}"
                     }
-                    copyRec(cache, destDir)
-                    val head = File(cache, ".git/HEAD")
-                    val branch = if (head.exists()) {
-                        val h = head.readText().trim()
-                        if (h.startsWith("ref:")) h.removePrefix("ref:").trim().substringAfterLast('/') else "detached"
-                    } else "?"
-                    val commit = try {
-                        val refs = File(cache, ".git/FETCH_HEAD")
-                        if (refs.exists()) refs.readText().trim().split(Regex("\\s+")).firstOrNull() ?: "?"
-                        else "?"
-                    } catch (_: Exception) { "?" }
-                    payload = "{\"ok\":true,\"commit\":${jsonString(commit)}," +
-                        "\"branch\":${jsonString(branch)},\"files\":$copied}"
                 } catch (e: Exception) {
                     payload = "{\"ok\":false,\"error\":${jsonString(e.message ?: e.toString())}}"
                 } finally {
@@ -866,7 +1004,7 @@ class MainActivity : ComponentActivity() {
                 var headersJsonOut = "{}"
                 var conn: HttpURLConnection? = null
                 try {
-                    conn = URL(url).openConnection() as HttpURLConnection
+                    conn = openMaybeDoh(url)
                     conn.requestMethod = method.uppercase()
                     conn.connectTimeout = 30000
                     // LLM generations can take minutes — generous read timeout.

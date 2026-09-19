@@ -463,7 +463,7 @@ async function gitClone(url,targetPath){
   if(r.error||typeof r.result!=="object")return {result:"GIT_CLONE_FAILED: "+(typeof r.result==="string"?r.result:"bridge error"),error:true};
   const p=r.result;
   if(!p.ok)return {result:"GIT_CLONE_FAILED: "+(p.error||"unknown")+"\n(For private repos configure a GitHub token in Settings — it is used automatically.)",error:true};
-  return {result:["Cloned successfully.","branch: "+(p.branch||"?"),"commit: "+String(p.commit||"?").slice(0,10),"files copied: "+p.files,"target: "+(targetPath||"project root")].join("\n"),error:false};
+  return {result:["Cloned successfully"+(p.method==="zipball"?" (via zipball fallback — direct git was blocked)":"")+".","branch: "+(p.branch||"?"),"commit: "+String(p.commit||"?").slice(0,10),"files copied: "+p.files,"target: "+(targetPath||"project root")].join("\n"),error:false};
 }
 async function openProject(){
   if(window.Android&&Android.openProjectPicker){Android.openProjectPicker()}
