@@ -2199,6 +2199,29 @@ function saveGitHubSettings(){
   localStorage.setItem("githubToken",state.githubToken);
   localStorage.setItem("githubRepo",state.githubRepo);
 }
+/* Classic (ghp_…), fine-grained (github_pat_…), oauth/app tokens — the API
+   accepts all of them with Bearer auth; only the required SCOPES differ. */
+function tokenKind(t){
+  if(/^ghp_/.test(t))return "classic";
+  if(/^github_pat_/.test(t))return "fine-grained";
+  if(/^gh[ous]_/.test(t))return "oauth/app";
+  return "token";
+}
+function tokenHint(t){
+  if(/^ghp_/.test(t))return "classic-токену нужен scope repo";
+  if(/^github_pat_/.test(t))return "fine-grained-токену нужны Contents: read+write (и Administration: read+write для создания репо)";
+  return "проверь скоупы токена";
+}
+/* Turn GitHub API failures into instructions instead of raw JSON. */
+function ghErr(r,fallback){
+  const b=String(r&&r.body||"");
+  let msg=b;
+  try{msg=JSON.parse(b).message||b}catch(e){}
+  if(r&&r.status===401)return "GitHub отклонил токен (401 Bad Credentials) — скопирован не целиком или отозван.";
+  if(r&&r.status===403)return "У токена недостаточно прав (403): "+tokenHint(state.githubToken)+". "+String(msg).slice(0,200);
+  if(r&&r.status===404)return "GitHub вернул 404: репозиторий не существует или токен не имеет к нему доступа. "+String(msg).slice(0,200);
+  return (fallback?fallback+" ":"")+String(msg).slice(0,300);
+}
 async function githubRequest(method,path,body){
   const token=state.githubToken;
   if(!token) return {status:401,body:'{"message":"GitHub token is not configured"}',error:true};
@@ -2213,12 +2236,12 @@ async function githubVerify(){
   saveGitHubSettings();
   if(!state.githubToken){throw Error("Enter a GitHub token first.");}
   const r=await githubRequest("GET","/user");
-  if(r.error||r.status<200||r.status>=300)throw Error("GitHub: "+(r.body||"authentication failed").slice(0,500));
+  if(r.error||r.status<200||r.status>=300)throw Error(ghErr(r,"Проверка аккаунта не удалась."));
   const u=JSON.parse(r.body);
   state.githubUser=u.login||"";
   localStorage.setItem("githubUser",state.githubUser);
   const el=$("githubStatus");
-  if(el)el.textContent="Connected as @"+state.githubUser;
+  if(el)el.textContent="Connected as @"+state.githubUser+" · "+tokenKind(state.githubToken)+" ("+state.githubToken.slice(0,4)+"…"+state.githubToken.slice(-4)+")";
   return u;
 }
 async function githubPushProject(ownerRepo,message){
@@ -2229,11 +2252,11 @@ async function githubPushProject(ownerRepo,message){
   const [owner,name]=repo.split("/");
   const branch="main";
   const ref=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${branch}`);
-  if(ref.status===404)throw Error("Branch 'main' was not found in "+repo+".");
-  if(ref.error||ref.status<200||ref.status>=300)throw Error("GitHub ref: "+ref.body.slice(0,500));
+  if(ref.status===404)throw Error("Branch 'main' was not found in "+repo+" — либо её нет, либо токен не видит этот репозиторий ("+tokenHint(state.githubToken)+"). Можно создать репо тулом github_create_repo.");
+  if(ref.error||ref.status<200||ref.status>=300)throw Error(ghErr(ref,"GitHub ref failed."));
   const refData=JSON.parse(ref.body), headSha=refData.object.sha;
   const commit=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits/${headSha}`);
-  if(commit.error||commit.status<200||commit.status>=300)throw Error("GitHub commit: "+commit.body.slice(0,500));
+  if(commit.error||commit.status<200||commit.status>=300)throw Error(ghErr(commit,"GitHub commit failed."));
   const baseTree=JSON.parse(commit.body).tree.sha;
 
   const listing=await fsCall("list");
@@ -2247,7 +2270,7 @@ async function githubPushProject(ownerRepo,message){
     const rr=await fsCall("readb64",path);
     if(rr.error)continue;
     const blob=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/blobs`,{content:rr.result,encoding:"base64"});
-    if(blob.error||blob.status<200||blob.status>=300)throw Error("Blob failed for "+path+": "+blob.body.slice(0,300));
+    if(blob.error||blob.status<200||blob.status>=300)throw Error(ghErr(blob,"Blob upload failed for "+path+"."));
     tree.push({path,mode:"100644",type:"blob",sha:JSON.parse(blob.body).sha});
   }
   // Deletions: files removed locally must vanish remotely too. The SAF
@@ -2270,13 +2293,13 @@ async function githubPushProject(ownerRepo,message){
     }
   }
   const tr=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees`,{base_tree:baseTree,tree});
-  if(tr.error||tr.status<200||tr.status>=300)throw Error("Tree failed: "+tr.body.slice(0,500));
+  if(tr.error||tr.status<200||tr.status>=300)throw Error(ghErr(tr,"GitHub tree failed."));
   const newTree=JSON.parse(tr.body).sha;
   const cm=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits`,{message:message||"Update from NightCode",tree:newTree,parents:[headSha]});
-  if(cm.error||cm.status<200||cm.status>=300)throw Error("Commit failed: "+cm.body.slice(0,500));
+  if(cm.error||cm.status<200||cm.status>=300)throw Error(ghErr(cm,"GitHub commit failed."));
   const newSha=JSON.parse(cm.body).sha;
   const up=await githubRequest("PATCH",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/refs/heads/${branch}`,{sha:newSha,force:false});
-  if(up.error||up.status<200||up.status>=300)throw Error("Push failed: "+up.body.slice(0,500));
+  if(up.error||up.status<200||up.status>=300)throw Error(ghErr(up,"Push failed."));
   return "Pushed "+paths.length+" files"+(deleted?", deleted "+deleted:"")+" to "+repo+" (main), commit "+newSha.slice(0,7);
 }
 /* Pull = reset --hard to origin/main: every remote file overwrites local,
@@ -2290,13 +2313,13 @@ async function githubPullProject(ownerRepo){
   const [owner,name]=repo.split("/");
   const ref=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/main`);
   if(ref.status===404)throw Error("Branch 'main' was not found in "+repo+".");
-  if(ref.error||ref.status<200||ref.status>=300)throw Error("GitHub ref: "+ref.body.slice(0,500));
+  if(ref.error||ref.status<200||ref.status>=300)throw Error(ghErr(ref,"GitHub ref failed."));
   const headSha=JSON.parse(ref.body).object.sha;
   const commit=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits/${headSha}`);
-  if(commit.error||commit.status<200||commit.status>=300)throw Error("GitHub commit: "+commit.body.slice(0,500));
+  if(commit.error||commit.status<200||commit.status>=300)throw Error(ghErr(commit,"GitHub commit failed."));
   const baseTree=JSON.parse(commit.body).tree.sha;
   const tr=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees/${baseTree}?recursive=1`);
-  if(tr.error||tr.status<200||tr.status>=300)throw Error("GitHub tree: "+tr.body.slice(0,500));
+  if(tr.error||tr.status<200||tr.status>=300)throw Error(ghErr(tr,"GitHub tree failed."));
   const trj=JSON.parse(tr.body);
   if(trj.truncated)throw Error("Repository tree too large for pull (truncated response).");
   const remoteFiles=(trj.tree||[]).filter(e=>e.type==="blob"&&!/^(\.git\/|build\/|\.gradle\/)/.test(e.path));
@@ -2341,11 +2364,11 @@ async function githubCreateRepo(name,opts={}){
   if(!/^[A-Za-z0-9_.-]{1,100}$/.test(repoName))throw Error("Invalid repository name (letters, digits, -, _, . only).");
   const priv=opts.private!==false; // private unless explicitly told otherwise
   const me=await githubRequest("GET","/user");
-  if(me.error||me.status<200||me.status>=300)throw Error("GitHub auth: "+me.body.slice(0,300));
+  if(me.error||me.status<200||me.status>=300)throw Error(ghErr(me,"Не удалось определить аккаунт."));
   const owner=JSON.parse(me.body).login;
   const create=await githubRequest("POST","/user/repos",{name:repoName,private:priv,description:opts.description||"Created with NightCode"});
   if(create.status===422)throw Error("Repository '"+repoName+"' already exists (or the name was rejected).");
-  if(create.error||create.status<200||create.status>=300)throw Error("GitHub create failed (token needs repo scope): "+create.body.slice(0,500));
+  if(create.error||create.status<200||create.status>=300)throw Error(ghErr(create,"Создание репозитория не удалось."));
   // Bootstrap main: upload the current project, or commit an empty tree so
   // the branch exists (a bare new repo has no refs at all).
   const tree=[];
@@ -2356,18 +2379,18 @@ async function githubCreateRepo(name,opts={}){
       const rr=await fsCall("readb64",path);
       if(rr.error)continue;
       const blob=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/blobs`,{content:rr.result,encoding:"base64"});
-      if(blob.error||blob.status<200||blob.status>=300)continue;
+      if(blob.error||blob.status<200||blob.status>=300)throw Error(ghErr(blob,"Blob upload failed for "+path+"."));
       tree.push({path,mode:"100644",type:"blob",sha:JSON.parse(blob.body).sha});
     }
   }
   const tr=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/trees`,{tree});
-  if(tr.error||tr.status<200||tr.status>=300)throw Error("GitHub tree: "+tr.body.slice(0,500));
+  if(tr.error||tr.status<200||tr.status>=300)throw Error(ghErr(tr,"GitHub tree failed."));
   const newTree=JSON.parse(tr.body).sha;
   const cm=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/commits`,{message:"Initial commit from NightCode",tree:newTree,parents:[]});
-  if(cm.error||cm.status<200||cm.status>=300)throw Error("GitHub commit: "+cm.body.slice(0,500));
+  if(cm.error||cm.status<200||cm.status>=300)throw Error(ghErr(cm,"GitHub commit failed."));
   const sha=JSON.parse(cm.body).sha;
   const ref=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/refs`,{ref:"refs/heads/main",sha});
-  if(ref.error||ref.status<200||ref.status>=300)throw Error("GitHub ref: "+ref.body.slice(0,500));
+  if(ref.error||ref.status<200||ref.status>=300)throw Error(ghErr(ref,"GitHub ref failed."));
   // Target the new repo by default so push/pull act on it immediately.
   state.githubRepo=owner+"/"+repoName;
   localStorage.setItem("githubRepo",state.githubRepo);
