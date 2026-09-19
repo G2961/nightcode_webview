@@ -221,6 +221,10 @@ function render(){
   }
   const prevScrollTop=chat.scrollTop;
   chat.innerHTML=state.messages.map(messageHtml).join("");
+  // The newest message always shows its actions — copy-after-answer is the
+  // most common gesture; older messages reveal theirs on tap.
+  const lastMsgEl=chat.querySelector(".message:last-child");
+  if(lastMsgEl)lastMsgEl.classList.add("acted");
   // Full re-render keeps the stick state: jump down only if we were at bottom.
   // Otherwise restore where the reader was — innerHTML replacement resets
   // scrollTop to 0, which would flash-jump to the top on every branch switch.
@@ -293,9 +297,14 @@ window.__streamDone=function(cbId,status,errMsg,error,cancelled){
   if(activeStreamCbId===cbId)activeStreamCbId=null;
   cb.onDone({status,errMsg,error:!!error,cancelled:!!cancelled});
 };
+/* User pressed STOP. Outlives a single stream: withRetry's backoff sleeps and
+   tool execution have no active socket to cancel, so a plain "disconnect the
+   current stream" was a no-op there — the request then re-fired or the tool
+   loop kept running, looking like the stop button is ignored. */
+let stopRequested=false;
 function cancelActiveStream(){
-  if(!activeStreamCbId)return;
-  if(window.Android&&Android.httpStreamCancel)Android.httpStreamCancel(activeStreamCbId);
+  stopRequested=true;
+  if(activeStreamCbId&&window.Android&&Android.httpStreamCancel)Android.httpStreamCancel(activeStreamCbId);
   activeStreamCbId=null;
 }
 function httpStream(method,url,headers={},body="",onChunk){
@@ -321,21 +330,32 @@ function httpStream(method,url,headers={},body="",onChunk){
 /* Retries with exponential backoff. Network-level failures (DNS/socket — Android
    freezes background apps and kills their sockets) get extra attempts with longer
    waits: the network is back within seconds after unfreeze, so waiting it out
-   beats failing the whole generation. HTTP 5xx: short standard backoff. */
-async function withRetry(fn,attempts=5){
+   beats failing the whole generation. HTTP 5xx: short standard backoff.
+   429 (rate limit) is transient too — retry with the long network backoff.
+   Every wait is chunked so a STOP press during the backoff window aborts
+   immediately instead of firing the next attempt afterwards. */
+async function withRetry(fn,attempts=5,onRetry){
   let lastErr=null;
   for(let i=0;i<attempts;i++){
+    if(stopRequested)return{status:0,errMsg:"cancelled",error:false,cancelled:true};
     try{
       const r=await fn();
-      if(r&&r.error===false&&r.status>=200&&r.status<500)return r;
-      lastErr=r;
       if(r&&r.cancelled)return r;
+      if(r&&r.error===false&&r.status>=200&&r.status<500&&r.status!==429)return r;
+      lastErr=r;
     }catch(e){lastErr={status:0,errMsg:String(e&&e.message||e),error:true,body:String(e&&e.message||e)}}
     if(i<attempts-1){
-      const isNet=lastErr&&(lastErr.error||lastErr.status===0||/resolve host|unreachable|reset|timed out|EOF/i.test(String(lastErr.errMsg||lastErr.body||"")));
+      const isNet=lastErr&&(lastErr.error||lastErr.status===0||lastErr.status===429||/resolve host|unreachable|reset|timed out|EOF|abort/i.test(String(lastErr.errMsg||lastErr.body||"")));
       const wait=isNet?2000*Math.pow(2,i):1000*Math.pow(2,i);
-      console.log("[NightCode] retry "+(i+2)+"/"+attempts+" in "+wait+"ms ("+(isNet?"network":"http "+(lastErr&&lastErr.status))+")");
-      await new Promise(res=>setTimeout(res,wait));
+      console.log("[NightCode] retry "+(i+2)+"/"+attempts+" in "+wait+"ms ("+(isNet?"network":(lastErr&&lastErr.status===429?"rate limit":"http "+(lastErr&&lastErr.status)))+")");
+      const till=Date.now()+wait;
+      while(Date.now()<till){
+        if(stopRequested)return{status:0,errMsg:"cancelled",error:false,cancelled:true};
+        await new Promise(res=>setTimeout(res,Math.min(200,till-Date.now())));
+      }
+      // A retried SSE POST regenerates the whole leg from scratch — reset the
+      // per-leg accumulators so replayed deltas don't duplicate the content.
+      if(onRetry)onRetry();
     }
   }
   return lastErr;
@@ -347,6 +367,16 @@ function netErrMsg(raw){
   if(/resolve host|UnknownHost/i.test(s))return "Сеть отвалилась — похоже, приложение было свёрнуто и Android заморозил соединение. Подожди секунду и отправь ещё раз.";
   if(/unreachable/i.test(s))return "Нет сети. Проверь подключение и повтори.";
   if(/reset|EOF|timed out/i.test(s))return "Соединение оборвалось. Повтори запрос.";
+  return null;
+}
+/* Human-readable message for API-level failures. Rate limits used to surface
+   as a bare "HTTP 429" or a silent early "Generation stopped" — spell them out. */
+function apiErrMsg(status,body){
+  const s=String(body||"");
+  if(status===429||/rate.?limit|too many requests|quota exceeded/i.test(s))return "Достигнут рейт-лимит модели (429) — подожди немного и попробуй снова, либо смени модель.";
+  if(status===401||status===403)return "Ошибка авторизации ("+status+"): проверь API-ключ.";
+  if(status===529||/overloaded/i.test(s))return "Сервер модели перегружен (529). Попробуй позже или смени модель.";
+  if(status>=500)return "Сервер модели вернул "+status+". Попробуй ещё раз.";
   return null;
 }
 function httpFetch(method,url,headers={},body){
@@ -898,6 +928,7 @@ async function send(override,targetId){
   const at=[...state.attachments];
   input.value="";resizeInput();state.attachments=[];renderAttachments();
   if(!regen)addMessage("user",prompt,at);
+  stopRequested=false; // new turn: re-arm the stop button
   $("sendBtn").classList.add("stop");
   showTyping();
   const started=Date.now();
@@ -923,7 +954,9 @@ async function send(override,targetId){
     const historySlice=regen&&targetId?state.messages.slice(0,-2):state.messages.slice(0,-1);
     const history=historySlice
       .map(m=>({role:m.role,content:strip(m.text)}))
-      .filter(m=>m.content);
+      // Drop stop/error placeholder bubbles — models choke on empty assistant
+      // turns, and a "⏹ Generation stopped." is not real content.
+      .filter(m=>m.content&&m.content!=="⏹ Generation stopped."&&!/^Error: /.test(m.content)&&!/^⚠️ Поток оборвался/.test(m.content));
     const messages=[];
     for(const m of history){
       const prev=messages[messages.length-1];
@@ -972,6 +1005,7 @@ async function send(override,targetId){
     const hideLiveCard=()=>{if(liveCard){liveCard.closest(".message").remove();liveCard=null}};
     _hideLiveCardFn=()=>{hideLiveCard();hideLiveBubble()};
     for(let turn=0;turn<8;turn++){
+      if(stopRequested)break; // user pressed stop while a tool was finishing
       const lim=getCtxLimits();
       const isOpenAI=state.protocol==="openai";
       const webTools=(state.searchProvider!=="free"&&state.ollamaKey)?[WEB_SEARCH_TOOL,WEB_FETCH_TOOL]:[WEB_SEARCH_TOOL];
@@ -1013,7 +1047,11 @@ async function send(override,targetId){
       // slow and providers cut it off on long answers.
       const blocks={};          // index -> {type,id,name,inputJson}
       let stopReason=null;
+      let streamError=null;     // SSE-level error event (rate limits etc.)
       const data={content:[]};
+      // Thinking accumulates across tool legs; remember where this leg starts
+      // so a retry can replay it cleanly without duplicating earlier content.
+      const thinkingBase=allThinking.length;
       // OpenAI streams tool-call argument fragments by index too, but under
       // choices[0].delta.tool_calls[i] instead of a content_block — same
       // "accumulate deltas into blocks[idx]" trick applies once normalized.
@@ -1084,9 +1122,20 @@ async function send(override,targetId){
           }
           if(ev.type==="message_delta"&&ev.delta&&ev.delta.stop_reason)stopReason=ev.delta.stop_reason;
           if(ev.type==="message_delta"&&ev.usage)updateUsage(ev.usage,true);
-          if(ev.type==="error")stopReason="error:"+((ev.error||{}).message||"stream error");
+          if(ev.type==="error"){
+            const em=(ev.error&&ev.error.message)||"stream error";
+            streamError=em;
+            stopReason="error:"+em;
+          }
         }catch(e){console.log("[NightCode] chunk handler error "+String(e&&e.message||e))}
-      }));
+      }),5,()=>{
+        // onRetry: the leg regenerates from scratch — drop its partial state.
+        for(const k of Object.keys(blocks))delete blocks[k];
+        allThinking=allThinking.slice(0,thinkingBase);
+        hideLiveBubble();
+        const tt2=document.getElementById("liveTitle");
+        if(tt2)tt2.textContent="Reconnecting…";
+      });
       if(r.cancelled){
         hideLiveCard();
         const partial=final.trim();
@@ -1105,13 +1154,14 @@ async function send(override,targetId){
         if(final||allThinking){
           hideLiveCard();
           const partial=final.trim();
-          const lm=commitAssistantReply(partial||"⚠️ Поток оборвался после размышлений (HTTP "+r.status+"). Попробуй ещё раз.",targetId);
+          const note=apiErrMsg(r.status,r.errMsg||r.body);
+          const lm=commitAssistantReply(partial||(note?"⚠️ "+note+".":"⚠️ Поток оборвался после размышлений (HTTP "+r.status+"). Попробуй ещё раз."),targetId);
           if(allThinking)lm.thinking=allThinking;
           lm.reasoning=Date.now()-started;save();render();
           return;
         }
         hideLiveCard();
-        throw Error("HTTP "+r.status+": "+String(r.errMsg||"").slice(0,500));
+        throw Error(apiErrMsg(r.status,r.errMsg||r.body)||("HTTP "+r.status+": "+String(r.errMsg||"").slice(0,500)));
       }
       // Assemble Anthropic-style content from the streamed blocks.
       const content=[];
@@ -1134,10 +1184,18 @@ async function send(override,targetId){
       // already accumulated into allThinking as they streamed in above.
       const text=content.filter(x=>x.type==="text").map(x=>x.text).join("\n");
       if(text)final+=(final?"\n\n":"")+text;
+      // Stream-level failures (rate limits etc.) arrive as SSE "error" events
+      // and end the stream looking "successful" — surface them explicitly
+      // instead of falling through to a confusing empty/async reply.
+      if((streamError||String(stopReason||"").startsWith("error:"))&&!final.trim()&&!toolUses.length){
+        const em=streamError||String(stopReason).slice(6);
+        throw Error(apiErrMsg(0,em)||("Сервер прервал генерацию: "+String(em).slice(0,300)));
+      }
       if(!toolUses.length)break;
       messages.push({role:"assistant",content});
       const results=[];
       for(const u of toolUses){
+        if(stopRequested)break; // stop pressed while another tool was running
         hideLiveBubble();
         const activity=showToolActivity(u.name,u.input||{});
         let out,err=false;
@@ -1150,6 +1208,16 @@ async function send(override,targetId){
         toolCalls.push({name:u.name,input:u.input||{},result:String(out),error:err});
         results.push({type:"tool_result",tool_use_id:u.id,is_error:err,content:String(out)});
       }
+      // Stopped mid-tool-loop: commit what exists; don't feed partial results
+      // back to the model (unmatched tool_use ids would fail the next request).
+      if(stopRequested){
+        removeTyping();hideLiveBubble();
+        const lm=commitAssistantReply(final.trim()||"⏹ Generation stopped.",targetId);
+        if(allThinking)lm.thinking=allThinking;
+        if(toolCalls.length)lm.tools=toolCalls;
+        lm.reasoning=Date.now()-started;save();render();
+        return;
+      }
       messages.push({role:"user",content:results});
       showTyping();
     }
@@ -1157,7 +1225,7 @@ async function send(override,targetId){
     hideLiveBubble();
     // When the model burns its whole budget on thinking and returns no text,
     // surface an honest explanation instead of a dead "(empty response)" bubble.
-    const finalText=final.trim()||"Модель не дала текстового ответа — возможно, лимит токенов исчерпан на размышления или тулах. Попробуй ещё раз или упрости запрос.";
+    const finalText=final.trim()||(stopRequested?"⏹ Generation stopped.":"Модель не дала текстового ответа — возможно, лимит токенов исчерпан на размышления или тулах. Попробуй ещё раз или упрости запрос.");
     const last=commitAssistantReply(finalText,targetId);
     last.reasoning=Date.now()-started;
     if(allThinking.trim())last.thinking=allThinking.trim();
@@ -2232,6 +2300,43 @@ document.addEventListener("DOMContentLoaded",()=>{
   on("sendBtn","click",()=>{
     if($("sendBtn")?.classList.contains("stop")){cancelActiveStream();return}
     send();
+  });
+  /* Message actions (copy/edit/retry/variants). Delegated on #chat because
+     render() replaces its innerHTML wholesale — listeners on buttons would
+     die on every re-render. These buttons used to be pure decoration.
+     Touch has no hover: tapping a message body reveals its action row. */
+  $("chat")?.addEventListener("click",e=>{
+    const btn=e.target&&e.target.closest?e.target.closest(".msg-act-btn"):null;
+    if(!btn){
+      const t=e.target;
+      if(!t.closest||t.closest("a, details, button, img, pre, code, input, textarea"))return;
+      const msgEl=t.closest(".message");
+      if(!msgEl)return;
+      const was=msgEl.classList.contains("acted");
+      document.querySelectorAll(".message.acted").forEach(el=>el.classList.remove("acted"));
+      if(!was)msgEl.classList.add("acted");
+      return;
+    }
+    const act=btn.dataset.act;
+    const msgEl=btn.closest(".message");
+    const idx=msgEl?Number(msgEl.dataset.idx):-1;
+    if(act==="copy"){
+      const m=state.messages[idx];
+      if(!m)return;
+      const txt=m.text==="⏹ Generation stopped."?"":(m.text||"");
+      copyToClipboard(txt).then(ok=>{
+        if(ok){btn.classList.add("copied");setTimeout(()=>btn.classList.remove("copied"),1200)}
+        else showBanner("Не удалось скопировать");
+      });
+      return;
+    }
+    if($("sendBtn")?.classList.contains("stop"))return; // no branch switching mid-generation
+    if(act==="edit"){editMessage(idx);return}
+    if(act==="retry"){retryMessage(idx);return}
+    if(act==="prevVariant"||act==="nextVariant"){
+      const sw=btn.closest("[data-node]");
+      if(sw)switchVariant(sw.dataset.node,act==="prevVariant"?-1:1);
+    }
   });
   on("newChat","click",newChat);
   on("drawerNew","click",()=>{closeDrawer();newChat()});

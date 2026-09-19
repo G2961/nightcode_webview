@@ -76,17 +76,18 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke
 .user .bubble{background:linear-gradient(180deg,#282c3d,#20232f);border-color:#363c5e;border-bottom-right-radius:6px;max-width:85%;box-shadow:0 3px 14px rgba(60,66,120,.18)}
 .message.assistant .bubble{border-bottom-left-radius:6px}
 .message.assistant{margin-right:8%}
-.msg-time{font-size:10px;color:var(--text-3);margin:4px 8px 0}
+.msg-time{font-size:10px;color:var(--text-3);margin:4px 8px 0;-webkit-user-select:none;user-select:none}
 .message.user .msg-time{order:2}
-.msg-actions{display:flex;gap:2px;margin:4px 8px 0;opacity:0;max-height:0;overflow:hidden;transition:opacity .15s,max-height .15s}
+.msg-actions{display:flex;gap:2px;margin:4px 8px 0;opacity:0;max-height:0;overflow:hidden;transition:opacity .15s,max-height .15s;-webkit-user-select:none;user-select:none}
 .message.acted .msg-actions{opacity:1;max-height:30px}
 .msg-act-btn{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--text-3);transition:background .15s,color .15s}
 .msg-act-btn:active{background:var(--surface-2);color:var(--text-2)}
 .msg-act-btn svg{width:13px;height:13px}
 .msg-act-btn.copied{color:#7fd6a2}
-.msg-variant-switch{display:flex;align-items:center;gap:2px;margin:4px 8px 0}
+.msg-variant-switch{display:flex;align-items:center;gap:2px;margin:4px 8px 0;-webkit-user-select:none;user-select:none}
 .msg-variant-switch .msg-act-btn:disabled{opacity:.3}
-.msg-variant-count{font-size:10px;color:var(--text-3);min-width:20px;text-align:center}
+.msg-variant-count{font-size:10px;color:var(--text-3);min-width:20px;text-align:center;-webkit-user-select:none;user-select:none}
+.tool-activity-head{-webkit-user-select:none;user-select:none}
 .reasoning{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--text-3);margin-bottom:8px}
 .reasoning::before{content:"";width:5px;height:5px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 0 8px rgba(124,140,255,.65)}
 

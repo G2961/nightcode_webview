@@ -521,6 +521,10 @@ class MainActivity : ComponentActivity() {
     inner class AndroidBridge {
         // cb id -> live connection, so a stream can be aborted from JS mid-flight.
         private val activeStreams = java.util.concurrent.ConcurrentHashMap<String, HttpURLConnection>()
+        // Cancels that raced ahead of the stream thread (JS fired stop before the
+        // connection was registered) — remembered so the thread aborts on start
+        // instead of silently ignoring the stop.
+        private val cancelPending = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
         @JavascriptInterface
         fun openFilePicker() {
@@ -756,6 +760,12 @@ class MainActivity : ComponentActivity() {
         fun httpStream(method: String, url: String, headersJson: String, body: String, cb: String) {
             beginRequest()
             Thread {
+                // Stop arrived before this thread even started — report cancelled.
+                if (cancelPending.remove(cb)) {
+                    js("window.__streamDone && window.__streamDone(${jsonString(cb)}, 0, ${jsonString("cancelled")}, false, true)")
+                    endRequest()
+                    return@Thread
+                }
                 var code = 0
                 var error = false
                 var errMsg = ""
@@ -797,6 +807,7 @@ class MainActivity : ComponentActivity() {
                     error = !cancelled
                 } finally {
                     activeStreams.remove(cb)
+                    cancelPending.remove(cb) // stale cancels never leak the set
                 }
                 js("window.__streamDone && window.__streamDone(${jsonString(cb)}, $code, ${jsonString(errMsg)}, $error, $cancelled)")
                 endRequest()
@@ -806,7 +817,8 @@ class MainActivity : ComponentActivity() {
         /** Cancel an in-flight httpStream by its callback id (aborts the socket read). */
         @JavascriptInterface
         fun httpStreamCancel(cb: String) {
-            activeStreams.remove(cb)?.disconnect()
+            val conn = activeStreams.remove(cb)
+            if (conn != null) conn.disconnect() else cancelPending.add(cb)
         }
 
 
