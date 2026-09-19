@@ -863,8 +863,10 @@ class MainActivity : ComponentActivity() {
                 var code = 0
                 var respBody = ""
                 var error = false
+                var headersJsonOut = "{}"
+                var conn: HttpURLConnection? = null
                 try {
-                    val conn = URL(url).openConnection() as HttpURLConnection
+                    conn = URL(url).openConnection() as HttpURLConnection
                     conn.requestMethod = method.uppercase()
                     conn.connectTimeout = 30000
                     // LLM generations can take minutes — generous read timeout.
@@ -894,6 +896,16 @@ class MainActivity : ComponentActivity() {
                         conn.outputStream.use { it.write(bytes) }
                     }
                     code = conn.responseCode
+                    // Response headers travel back to JS too — e.g. GitHub reports a
+                    // classic token's scopes in x-oauth-scopes, which lets the UI
+                    // diagnose "insufficient permission" failures precisely.
+                    try {
+                        headersJsonOut = org.json.JSONObject().apply {
+                            for ((k, v) in conn.headerFields) {
+                                if (k != null && v != null && v.isNotEmpty()) put(k.lowercase(), v.joinToString(", "))
+                            }
+                        }.toString()
+                    } catch (_: Exception) {}
                     val stream = if (code in 200..399) conn.inputStream else conn.errorStream
                     respBody = stream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
                 } catch (e: Exception) {
@@ -901,7 +913,7 @@ class MainActivity : ComponentActivity() {
                     error = true
                 }
                 val payload = jsonString(respBody)
-                js("window.__httpResult && window.__httpResult(${jsonString(cb)}, $code, $payload, $error)")
+                js("window.__httpResult && window.__httpResult(${jsonString(cb)}, $code, $payload, $error, ${jsonString(headersJsonOut)})")
                 endRequest()
             }.start()
         }

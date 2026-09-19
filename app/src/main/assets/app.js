@@ -294,10 +294,12 @@ function updateScrollBtn(){
 
 /* ── Native HTTP bridge (bypasses CORS entirely: no origin, no preflight) ── */
 const httpCbs={};let httpCbId=0;
-window.__httpResult=function(cbId,status,body,error){
+window.__httpResult=function(cbId,status,body,error,headersJson){
   const cb=httpCbs[cbId];if(!cb)return;
   delete httpCbs[cbId];
-  cb({status,body,error:!!error});
+  let headers={};
+  try{headers=JSON.parse(headersJson||"{}")||{}}catch(e){}
+  cb({status,body,error:!!error,headers});
 };
 /* ── Streaming client (SSE via native bridge) ── */
 const streamCbs={};let streamCbId=0;
@@ -2243,7 +2245,19 @@ async function githubVerify(){
   state.githubUser=u.login||"";
   localStorage.setItem("githubUser",state.githubUser);
   const el=$("githubStatus");
-  if(el)el.textContent="Connected as @"+state.githubUser+" · "+tokenKind(state.githubToken)+" ("+state.githubToken.slice(0,4)+"…"+state.githubToken.slice(-4)+")";
+  const kind=tokenKind(state.githubToken);
+  let line="Connected as @"+state.githubUser+" · "+kind+" ("+state.githubToken.slice(0,4)+"…"+state.githubToken.slice(-4)+")";
+  // Classic tokens report their actual scopes in x-oauth-scopes — show them,
+  // so "repo scope missing" is obvious instead of failing later, opaquely.
+  if(kind==="classic"){
+    const scopes=String(r.headers&&r.headers["x-oauth-scopes"]||"").trim();
+    if(!scopes)line+=" · ⚠ скоупы не выданы — нужен repo";
+    else if(/\brepo\b/.test(scopes))line+=" · скоупы: "+scopes;
+    else line+=" · ⚠ нет repo в скоупах: "+scopes;
+  }else{
+    line+=" · скоупы скрыты GitHub";
+  }
+  if(el)el.textContent=line;
   return u;
 }
 async function githubPushProject(ownerRepo,message){
