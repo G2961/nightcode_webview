@@ -446,7 +446,7 @@ window.__fsResult=function(cbId,result,error){
 };
 function fsCall(method,...args){
   return new Promise(resolve=>{
-    if(!window.Android||!Android[method]){resolve("NO_BRIDGE",true);return}
+    if(!window.Android||!Android[method]){resolve({result:"NO_BRIDGE",error:true});return}
     const cbId="fs"+(++fsCbId);
     fsCbs[cbId]=(result,error)=>resolve({result,error:!!error});
     try{Android[method](...args,cbId)}catch(e){delete fsCbs[cbId];resolve({result:String(e),error:true})}
@@ -1473,7 +1473,7 @@ async function runTool(name,input){
       return r&&typeof r==="object"?r:{result:String(r),error:false};
     }catch(e){return {result:String(e&&e.message||e),error:true}}
   }
-  if(name==="github_whoami"||name==="github_create_repo"||name==="github_push_project"||name==="github_pull_project")return runGitHubTool(name,input||{});
+  if(name==="github_whoami"||name==="github_create_repo"||name==="github_delete_repo"||name==="github_push_project"||name==="github_pull_project")return runGitHubTool(name,input||{});
   if(name==="web_search")return runWebSearch(input.query);
   if(name==="web_fetch"){
     let url=String(input.url||"").trim();
@@ -2110,7 +2110,7 @@ function toolIcon(name){
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(paths[name]||paths.__ext)+'</svg>';
 }
-function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page',ssh_exec:'Running SSH command',ssh_list_hosts:'Listing SSH hosts',git_clone:'Cloning repository',github_create_repo:'Creating GitHub repository',github_push_project:'Pushing to GitHub',github_pull_project:'Pulling from GitHub'}[name]||String(name||'').replace(/_/g,' '))}
+function toolLabel(name){return ({list_files:'Inspecting project files',read_file:'Reading file',search_files:'Searching project',get_file_info:'Inspecting file',write_file:'Writing file',create_directory:'Creating folder',rename_file:'Renaming file',delete_file:'Deleting file',web_search:'Searching the web',web_fetch:'Reading web page',ssh_exec:'Running SSH command',ssh_list_hosts:'Listing SSH hosts',git_clone:'Cloning repository',github_create_repo:'Creating GitHub repository',github_delete_repo:'Deleting GitHub repository',github_push_project:'Pushing to GitHub',github_pull_project:'Pulling from GitHub'}[name]||String(name||'').replace(/_/g,' '))}
 /* Claude-style one-line labels: past tense + target, e.g. Searched "query" */
 function toolCompactLabel(t){
   const target=toolTarget(t.input)||"";
@@ -2130,6 +2130,7 @@ function toolCompactLabel(t){
     ssh_list_hosts:'Listed SSH hosts',
     git_clone:'Cloned repository',
     github_create_repo:'Created GitHub repository',
+    github_delete_repo:'Deleted GitHub repository',
     github_push_project:'Pushed project to GitHub',
     github_pull_project:'Pulled from GitHub',
     github_whoami:'Checked GitHub account'
@@ -2275,7 +2276,7 @@ async function githubPushProject(ownerRepo,message){
   if(commit.error||commit.status<200||commit.status>=300)throw Error(ghErr(commit,"GitHub commit failed."));
   const baseTree=JSON.parse(commit.body).tree.sha;
 
-  const listing=await fsCall("list");
+  const listing=await fsCall("fsList","");
   if(listing.error)throw Error("Cannot list project: "+listing.result);
   const paths=listing.result.split("\n").filter(p=>p&&!p.endsWith("/")&&!/^(\.git\/|build\/|\.gradle\/)/.test(p));
   if(!paths.length)throw Error("Project is empty.");
@@ -2283,7 +2284,7 @@ async function githubPushProject(ownerRepo,message){
   for(const path of paths){
     // Binary-safe: raw bytes as base64 — UTF-8 decoding would corrupt
     // images/archives beyond repair.
-    const rr=await fsCall("readb64",path);
+    const rr=await fsCall("fsReadB64",path);
     if(rr.error)continue;
     const blob=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/blobs`,{content:rr.result,encoding:"base64"});
     if(blob.error||blob.status<200||blob.status>=300)throw Error(ghErr(blob,"Blob upload failed for "+path+"."));
@@ -2348,21 +2349,21 @@ async function githubPullProject(ownerRepo){
       const bj=JSON.parse(blob.body);
       if(bj.encoding!=="base64"){failed++;continue}
       const content=String(bj.content||"").replace(/\s+/g,"");
-      const local=await fsCall("readb64",e.path);
+      const local=await fsCall("fsReadB64",e.path);
       if(!local.error&&local.result===content)continue; // unchanged, skip write
-      const w=await fsCall("write",e.path,content);
+      const w=await fsCall("fsWrite",e.path,content);
       if(w.error){failed++;continue}
       if(local.error)added++;else updated++;
     }catch(_){failed++}
   }
   let deleted=0;
-  const listing=await fsCall("list");
+  const listing=await fsCall("fsList","");
   if(!listing.error&&listing.result!=="NO_PROJECT"){
     const locals=listing.result.split("\n").filter(p=>p&&!p.endsWith("/")&&!/^(\.git\/|build\/|\.gradle\/)/.test(p));
     if(locals.length<500){
       for(const p of locals){
         if(remoteSet.has(p))continue;
-        const d=await fsCall("delete",p);
+        const d=await fsCall("fsDelete",p);
         if(!d.error)deleted++;
       }
     }
@@ -2383,7 +2384,19 @@ async function githubCreateRepo(name,opts={}){
   if(me.error||me.status<200||me.status>=300)throw Error(ghErr(me,"Не удалось определить аккаунт."));
   const owner=JSON.parse(me.body).login;
   const create=await githubRequest("POST","/user/repos",{name:repoName,private:priv,description:opts.description||"Created with NightCode"});
-  if(create.status===422)throw Error("Repository '"+repoName+"' already exists (or the name was rejected).");
+  if(create.status===422){
+    // Idempotent: a previous attempt may have created it before crashing.
+    // If it exists and the token can see it — just target it and let push
+    // sync content; DON'T rebuild the tree here (would clobber the repo).
+    const chk=await githubRequest("GET",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}`);
+    if(!chk.error&&chk.status>=200&&chk.status<300){
+      state.githubRepo=owner+"/"+repoName;
+      localStorage.setItem("githubRepo",state.githubRepo);
+      const el=$("githubRepoInput");if(el)el.value=state.githubRepo;
+      return "Repository "+state.githubRepo+" already exists — set it as the active repository. Use github_push_project to update its content.";
+    }
+    throw Error("Repository '"+repoName+"' already exists (or the name was rejected).");
+  }
   if(create.error||create.status<200||create.status>=300)throw Error(ghErr(create,"Создание репозитория не удалось."));
   // Fine-grained tokens only see repos selected at token creation — a repo
   // born seconds ago is invisible to them (404 on every follow-up call).
@@ -2394,11 +2407,11 @@ async function githubCreateRepo(name,opts={}){
   // Bootstrap main: upload the current project, or commit an empty tree so
   // the branch exists (a bare new repo has no refs at all).
   const tree=[];
-  const listing=await fsCall("list");
+  const listing=await fsCall("fsList","");
   if(!listing.error&&listing.result!=="NO_PROJECT"){
     const paths=listing.result.split("\n").filter(p=>p&&!p.endsWith("/")&&!/^(\.git\/|build\/|\.gradle\/)/.test(p)).slice(0,500);
     for(const path of paths){
-      const rr=await fsCall("readb64",path);
+      const rr=await fsCall("fsReadB64",path);
       if(rr.error)continue;
       const blob=await githubRequest("POST",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/git/blobs`,{content:rr.result,encoding:"base64"});
       if(blob.error||blob.status<200||blob.status>=300)throw Error(repoErr(blob,"Blob upload failed for "+path+"."));
@@ -2419,9 +2432,29 @@ async function githubCreateRepo(name,opts={}){
   const el=$("githubRepoInput");if(el)el.value=state.githubRepo;
   return "Created "+(priv?"private ":"")+"repository "+state.githubRepo+" (main @"+sha.slice(0,7)+", "+tree.length+" files committed)";
 }
+/* PERMANENT repo deletion. Guarded by an explicit confirm phrase so the
+   model cannot nuke anything by accident. Classic token needs the
+   delete_repo scope; fine-grained needs Administration: write. */
+async function githubDeleteRepo(ownerRepo,confirm){
+  saveGitHubSettings();
+  if(!state.githubToken)throw Error("GitHub token is not configured.");
+  if(confirm!=="DELETE")throw Error('Refused: this deletes the repository PERMANENTLY. Call again with confirm:"DELETE" to proceed.');
+  const repo=(ownerRepo||state.githubRepo||"").replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"").replace(/^\/+|\/+$/g,"");
+  if(!/^[^/]+\/[^/]+$/.test(repo))throw Error("Set repository as owner/name in GitHub settings.");
+  const [owner,name]=repo.split("/");
+  const del=await githubRequest("DELETE",`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
+  if(del.status===204){
+    if(state.githubRepo===repo){state.githubRepo="";localStorage.setItem("githubRepo","")}
+    return "Deleted "+repo+" permanently.";
+  }
+  if(del.status===404)throw Error("Репозиторий "+repo+" не найден или токен не имеет к нему доступа.");
+  if(del.status===403)throw Error("Токен не может удалять репозитории: classic-токену нужен scope delete_repo, fine-grained — Administration: write.");
+  throw Error(ghErr(del,"Удаление не удалось."));
+}
 const GITHUB_TOOLS=[
   {name:"github_whoami",description:"Check the connected GitHub account.",input_schema:{type:"object",properties:{},required:[]}},
-  {name:"github_create_repo",description:"Create a new GitHub repository under the connected account and push the current project into it as the initial commit on main. Sets it as the active repository for push/pull. Use when the user asks to create/publish a new repository.",input_schema:{type:"object",properties:{name:{type:"string",description:"Repository name (letters, digits, -, _, .)"},private:{type:"boolean",description:"Create as private (default true)"},description:{type:"string",description:"Short repository description"}},required:["name"]}},
+  {name:"github_create_repo",description:"Create a new GitHub repository under the connected account and push the current project into it as the initial commit on main. Sets it as the active repository for push/pull. Idempotent: if the repository already exists, it is set as the active one instead of failing. Use when the user asks to create/publish a new repository.",input_schema:{type:"object",properties:{name:{type:"string",description:"Repository name (letters, digits, -, _, .)"},private:{type:"boolean",description:"Create as private (default true)"},description:{type:"string",description:"Short repository description"}},required:["name"]}},
+  {name:"github_delete_repo",description:"PERMANENTLY delete a GitHub repository owned by the connected account. IRREVERSIBLE — all code, issues and history are gone. Only use when the user explicitly names the repository to delete and confirms; ask for confirmation first if unsure. The token needs delete_repo scope (classic) or Administration: write (fine-grained).",input_schema:{type:"object",properties:{repository:{type:"string",description:"owner/name; optional if configured in Settings"},confirm:{type:"string",description:'Must be exactly "DELETE" to proceed'}},required:["confirm"]}},
   {name:"github_push_project",description:"Commit the current NightCode project and push it to the configured GitHub repository on the main branch. Use only when the user asks to commit/push/sync to GitHub.",input_schema:{type:"object",properties:{repository:{type:"string",description:"owner/name; optional if configured in Settings"} ,message:{type:"string",description:"Commit message"}},required:[]}},
   {name:"github_pull_project",description:"Pull the configured GitHub repository (main branch) into the current NightCode project. Semantics are like reset --hard: remote files overwrite local ones and local files missing remotely are deleted. Warn the user about unsaved local changes before pulling. Use when the user asks to pull/update/sync from GitHub.",input_schema:{type:"object",properties:{repository:{type:"string",description:"owner/name; optional if configured in Settings"}},required:[]}}
 ];
@@ -2429,6 +2462,7 @@ const GITHUB_TOOLS=[
 async function runGitHubTool(name,input){
   if(name==="github_whoami")return {result:(await githubVerify()).login||state.githubUser,error:false};
   if(name==="github_create_repo")return {result:await githubCreateRepo(input?.name,{private:input?.private,description:input?.description}),error:false};
+  if(name==="github_delete_repo")return {result:await githubDeleteRepo(input?.repository,input?.confirm),error:false};
   if(name==="github_push_project")return {result:await githubPushProject(input?.repository,input?.message),error:false};
   if(name==="github_pull_project")return {result:await githubPullProject(input?.repository),error:false};
   return {result:"Unknown GitHub tool",error:true};
